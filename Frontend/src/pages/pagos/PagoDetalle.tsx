@@ -1,14 +1,17 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, MapPin, CalendarDays, Users, CreditCard, FileText, Download, CheckCircle, XCircle, RotateCcw, DollarSign } from "lucide-react";
+import {
+  ArrowLeft, MapPin, CalendarDays, Users, CreditCard,
+  Clock, DollarSign, XCircle, CheckCircle,
+} from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
-import { PageHeader } from "@/components/admin/PageHeader";
 import { StatusBadge } from "@/components/admin/StatusBadge";
+import { EmptyState } from "@/components/admin/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { pagosMock } from "@/data/pagosMock";
 import { toast } from "sonner";
+import { getPagoById, updatePagoEstado, ApiError } from "@/lib/api";
 
 const metodoPagoLabel: Record<string, string> = {
   transferencia: "Transferencia bancaria",
@@ -17,67 +20,122 @@ const metodoPagoLabel: Record<string, string> = {
   cheque: "Cheque",
 };
 
-const estadoToEstadoType = {
-  pendiente: "pendiente",
-  pagado: "pagado",
-  cancelado: "cancelado",
-  reembolsado: "reembolsado",
-} as const;
+function formatCurrency(value: number) {
+  return value.toLocaleString("es-MX", { style: "currency", currency: "MXN" });
+}
+
+function InfoField({ label, value, highlight, className }: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+  className?: string;
+}) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
+      <p className={`font-medium ${highlight ? "text-lg" : ""} ${className ?? ""}`}>{value}</p>
+    </div>
+  );
+}
 
 export default function PagoDetalle() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const pago = pagosMock.find((p) => p.id === id);
+  const queryClient = useQueryClient();
 
-  if (!pago) {
+  const { data: pago, isLoading, error } = useQuery({
+    queryKey: ["pago", id],
+    queryFn: () => getPagoById(id!),
+    enabled: !!id,
+  });
+
+  const cambiarEstadoMutation = useMutation({
+    mutationFn: (estado: string) => updatePagoEstado(id!, estado),
+    onSuccess: (_, estado) => {
+      queryClient.invalidateQueries({ queryKey: ["pago", id] });
+      queryClient.invalidateQueries({ queryKey: ["pagos"] });
+      const labels: Record<string, string> = {
+        pagado:    "marcado como pagado",
+        cancelado: "cancelado",
+      };
+      toast.success(`Pago ${labels[estado] ?? estado} correctamente`);
+    },
+    onError: (err) => {
+      const mensaje = err instanceof ApiError
+        ? (err.data as { error?: string })?.error ?? `Error ${err.status}`
+        : "No se pudo actualizar el estado";
+      toast.error(mensaje);
+    },
+  });
+
+  if (isLoading) {
     return (
       <AppLayout>
-        <PageHeader title="Pago no encontrado" />
-        <Button variant="outline" onClick={() => navigate("/pagos")}>Volver a pagos</Button>
+        <EmptyState title="Cargando pago..." description="Por favor espera." />
       </AppLayout>
     );
   }
 
+  if (error || !pago) {
+    return (
+      <AppLayout>
+        <EmptyState title="Pago no encontrado" description="El pago solicitado no existe o fue eliminado." />
+        <div className="mt-4">
+          <Button variant="outline" onClick={() => navigate("/pagos")}>Volver a pagos</Button>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const isPending = pago.estado === "pendiente";
+
   return (
     <AppLayout>
+      {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate("/pagos")}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex-1">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">{pago.id}</h1>
-            <StatusBadge estado={estadoToEstadoType[pago.estado]} />
+            <h1 className="text-2xl font-semibold tracking-tight font-mono">
+              {pago.id.slice(0, 8)}…
+            </h1>
+            <StatusBadge estado={pago.estado} />
           </div>
-          <p className="text-sm text-muted-foreground mt-0.5">Reservación {pago.folioReservacion}</p>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Reservación {pago.reservacionFolio}
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          {pago.estado === "pendiente" && (
+          {isPending && (
             <>
-              <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={() => toast.success("Pago validado")}>
-                <CheckCircle className="h-3.5 w-3.5" /> Validar pago
+              <Button
+                size="sm"
+                className="gap-1.5 text-xs"
+                disabled={cambiarEstadoMutation.isPending}
+                onClick={() => cambiarEstadoMutation.mutate("pagado")}
+              >
+                <CheckCircle className="h-3.5 w-3.5" />
+                Marcar como pagado
               </Button>
-              <Button size="sm" className="gap-1.5 text-xs" onClick={() => toast.success("Marcado como pagado")}>
-                <DollarSign className="h-3.5 w-3.5" /> Marcar como pagado
-              </Button>
-              <Button size="sm" variant="destructive" className="gap-1.5 text-xs" onClick={() => toast.info("Pago cancelado")}>
-                <XCircle className="h-3.5 w-3.5" /> Cancelar
+              <Button
+                size="sm"
+                variant="destructive"
+                className="gap-1.5 text-xs"
+                disabled={cambiarEstadoMutation.isPending}
+                onClick={() => cambiarEstadoMutation.mutate("cancelado")}
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                Cancelar pago
               </Button>
             </>
           )}
-          {pago.estado === "pagado" && (
-            <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={() => toast.info("Reembolso iniciado")}>
-              <RotateCcw className="h-3.5 w-3.5" /> Reembolsar
-            </Button>
-          )}
-          <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={() => toast.info("Recibo descargado")}>
-            <Download className="h-3.5 w-3.5" /> Descargar recibo
-          </Button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main content */}
+        {/* Columna principal */}
         <div className="lg:col-span-2 space-y-6">
           <Card>
             <CardHeader className="pb-3">
@@ -85,66 +143,72 @@ export default function PagoDetalle() {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 gap-4 text-sm">
-                <InfoField label="Monto total" value={`$${pago.montoTotal.toLocaleString("es-MX")}`} highlight />
-                <InfoField label="Anticipo" value={pago.anticipo > 0 ? `$${pago.anticipo.toLocaleString("es-MX")}` : "Sin anticipo"} />
-                <InfoField label="Saldo pendiente" value={pago.saldoPendiente > 0 ? `$${pago.saldoPendiente.toLocaleString("es-MX")}` : "$0"} className={pago.saldoPendiente > 0 ? "text-destructive font-semibold" : "text-success font-semibold"} />
-                <InfoField label="Método de pago" value={metodoPagoLabel[pago.metodoPago]} />
-                <InfoField label="Referencia" value={pago.referencia || "Sin referencia"} />
-                <InfoField label="Fecha de pago" value={pago.fechaPago || "Pendiente"} />
+                <InfoField
+                  label="Monto de este pago"
+                  value={formatCurrency(pago.monto)}
+                  highlight
+                />
+                <InfoField
+                  label="Método de pago"
+                  value={metodoPagoLabel[pago.metodo] ?? pago.metodo}
+                />
+                <InfoField
+                  label="Referencia"
+                  value={pago.referencia || "Sin referencia"}
+                />
+                <InfoField
+                  label="Fecha de pago"
+                  value={pago.fechaPago || "Sin fecha registrada"}
+                />
+                <InfoField
+                  label="Folio reservación"
+                  value={pago.reservacionFolio}
+                />
+                <InfoField
+                  label="Estado"
+                  value={pago.estado.charAt(0).toUpperCase() + pago.estado.slice(1)}
+                  className={
+                    pago.estado === "pagado"
+                      ? "text-green-600"
+                      : pago.estado === "cancelado"
+                      ? "text-destructive"
+                      : "text-yellow-600"
+                  }
+                />
               </div>
             </CardContent>
           </Card>
 
-          <Tabs defaultValue="historial">
-            <TabsList>
-              <TabsTrigger value="historial">Historial de pagos</TabsTrigger>
-              <TabsTrigger value="comprobante">Comprobante</TabsTrigger>
-            </TabsList>
-            <TabsContent value="historial">
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="space-y-3">
-                    {pago.historial.map((h, i) => (
-                      <div key={i} className="flex items-start gap-3 text-sm">
-                        <div className="mt-1 h-2 w-2 rounded-full bg-primary shrink-0" />
-                        <div className="flex-1">
-                          <p className="font-medium">{h.accion}</p>
-                          <p className="text-xs text-muted-foreground">{h.usuario} · {h.fecha}</p>
-                        </div>
-                        {h.monto && (
-                          <span className="text-xs font-medium bg-muted px-2 py-0.5 rounded">
-                            ${h.monto.toLocaleString("es-MX")}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-            <TabsContent value="comprobante">
-              <Card>
-                <CardContent className="pt-6">
-                  {pago.comprobante ? (
-                    <div className="flex items-center justify-between bg-muted/50 rounded-lg px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <FileText className="h-5 w-5 text-muted-foreground" />
-                        <div>
-                          <p className="text-sm font-medium">{pago.comprobante}</p>
-                          <p className="text-xs text-muted-foreground">Documento adjunto</p>
-                        </div>
-                      </div>
-                      <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={() => toast.info("Comprobante descargado")}>
-                        <Download className="h-3.5 w-3.5" /> Ver
-                      </Button>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground text-center py-6">No se ha adjuntado comprobante de pago.</p>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+          {/* Resumen financiero */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Resumen financiero</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-3 gap-4 text-sm">
+                <div className="bg-muted/50 rounded-lg p-3">
+                  <p className="text-xs text-muted-foreground mb-1">Total reservación</p>
+                  <p className="text-base font-semibold">{formatCurrency(pago.montoTotal)}</p>
+                </div>
+                <div className="bg-muted/50 rounded-lg p-3">
+                  <p className="text-xs text-muted-foreground mb-1">Total abonado</p>
+                  <p className="text-base font-semibold text-green-600">{formatCurrency(pago.totalPagado)}</p>
+                </div>
+                <div className={`rounded-lg p-3 ${pago.saldoPendiente > 0 ? "bg-destructive/10" : "bg-green-50 dark:bg-green-950/30"}`}>
+                  <p className="text-xs text-muted-foreground mb-1">Saldo pendiente</p>
+                  <p className={`text-base font-semibold ${pago.saldoPendiente > 0 ? "text-destructive" : "text-green-600"}`}>
+                    {formatCurrency(pago.saldoPendiente)}
+                  </p>
+                </div>
+              </div>
+              {pago.saldoPendiente === 0 && (
+                <div className="flex items-center gap-1.5 mt-3 pt-3 border-t">
+                  <DollarSign className="h-3.5 w-3.5 text-green-600" />
+                  <span className="text-xs text-green-600 font-medium">Reservación completamente pagada</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         {/* Sidebar */}
@@ -158,14 +222,14 @@ export default function PagoDetalle() {
                 <MapPin className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <div>
                   <p className="text-xs text-muted-foreground">Espacio</p>
-                  <p className="font-medium">{pago.espacio}</p>
+                  <p className="font-medium">{pago.espacioNombre}</p>
                 </div>
               </div>
               <div className="flex items-start gap-2.5">
                 <Users className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <div>
                   <p className="text-xs text-muted-foreground">Solicitante</p>
-                  <p className="font-medium">{pago.solicitante}</p>
+                  <p className="font-medium">{pago.solicitanteNombre}</p>
                 </div>
               </div>
               <div className="flex items-start gap-2.5">
@@ -176,6 +240,13 @@ export default function PagoDetalle() {
                 </div>
               </div>
               <div className="flex items-start gap-2.5">
+                <Clock className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Horario</p>
+                  <p className="font-medium">{pago.horaInicio} – {pago.horaFin}</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2.5">
                 <CreditCard className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <div>
                   <p className="text-xs text-muted-foreground">Tipo de evento</p>
@@ -183,46 +254,18 @@ export default function PagoDetalle() {
                 </div>
               </div>
               <Separator />
-              <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => navigate(`/reservaciones/${pago.folioReservacion}`)}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full text-xs"
+                onClick={() => navigate(`/reservaciones/${pago.reservacionId}`)}
+              >
                 Ver reservación
               </Button>
-            </CardContent>
-          </Card>
-
-          {/* Resumen financiero */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Resumen financiero</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Monto total</span>
-                <span className="font-medium">${pago.montoTotal.toLocaleString("es-MX")}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Anticipo</span>
-                <span className="font-medium text-success">${pago.anticipo.toLocaleString("es-MX")}</span>
-              </div>
-              <Separator />
-              <div className="flex justify-between font-semibold">
-                <span>Saldo pendiente</span>
-                <span className={pago.saldoPendiente > 0 ? "text-destructive" : "text-success"}>
-                  ${pago.saldoPendiente.toLocaleString("es-MX")}
-                </span>
-              </div>
             </CardContent>
           </Card>
         </div>
       </div>
     </AppLayout>
-  );
-}
-
-function InfoField({ label, value, highlight, className }: { label: string; value: string; highlight?: boolean; className?: string }) {
-  return (
-    <div>
-      <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
-      <p className={`font-medium ${highlight ? "text-lg" : ""} ${className || ""}`}>{value}</p>
-    </div>
   );
 }

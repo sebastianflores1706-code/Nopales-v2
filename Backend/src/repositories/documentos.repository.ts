@@ -1,36 +1,60 @@
 import { randomUUID } from "crypto";
+import pool from "../lib/db";
 
 export interface Documento {
   id: string;
   reservacionId: string;
   tipo: string;
   nombreArchivo: string;
-  contenidoHtml: string;
+  contenido: string;
   createdAt: string;
 }
 
-const documentos: Documento[] = [];
+function toDocumento(row: Record<string, unknown>): Documento {
+  return {
+    id:            row.id as string,
+    reservacionId: row.reservacion_id as string,
+    tipo:          row.tipo as string,
+    nombreArchivo: row.nombre_archivo as string,
+    contenido: row.contenido as string,
+    createdAt:     row.creado_en instanceof Date
+                     ? row.creado_en.toISOString()
+                     : String(row.creado_en),
+  };
+}
 
 export const documentosRepository = {
-  findAll(): Documento[] {
-    return documentos;
+  async findAll(): Promise<Documento[]> {
+    const [rows] = await pool.query(
+      "SELECT * FROM documentos ORDER BY creado_en DESC"
+    );
+    return (rows as Record<string, unknown>[]).map(toDocumento);
   },
 
-  findById(id: string): Documento | undefined {
-    return documentos.find((d) => d.id === id);
+  async findById(id: string): Promise<Documento | undefined> {
+    const [rows] = await pool.query(
+      "SELECT * FROM documentos WHERE id = ?",
+      [id]
+    );
+    const list = rows as Record<string, unknown>[];
+    return list.length ? toDocumento(list[0]) : undefined;
   },
 
-  findByReservacionId(reservacionId: string): Documento[] {
-    return documentos.filter((d) => d.reservacionId === reservacionId);
+  async findByReservacionId(reservacionId: string): Promise<Documento[]> {
+    const [rows] = await pool.query(
+      "SELECT * FROM documentos WHERE reservacion_id = ? ORDER BY creado_en DESC",
+      [reservacionId]
+    );
+    return (rows as Record<string, unknown>[]).map(toDocumento);
   },
 
-  create(data: Omit<Documento, "id" | "createdAt">): Documento {
-    const nuevo: Documento = {
-      id: randomUUID(),
-      createdAt: new Date().toISOString(),
-      ...data,
-    };
-    documentos.push(nuevo);
-    return nuevo;
+  async create(data: Omit<Documento, "id" | "createdAt">): Promise<Documento> {
+    const id = randomUUID();
+    await pool.query(
+      `INSERT INTO documentos (id, reservacion_id, tipo, nombre_archivo, contenido)
+       VALUES (?, ?, ?, ?, ?)`,
+      [id, data.reservacionId, data.tipo, data.nombreArchivo, data.contenido]
+    );
+    return (await this.findById(id))!;
   },
 };

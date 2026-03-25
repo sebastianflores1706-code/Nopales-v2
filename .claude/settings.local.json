@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:3000/api/pagos)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s http://localhost:3000/api/reservaciones)",
+      "Bash(node -e \":*)"
+    ]
+  }
+}

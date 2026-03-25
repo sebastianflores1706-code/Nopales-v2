@@ -106,6 +106,10 @@ export interface ReservacionAPI {
   asistentes: number;
   estado: string;
   pagoEstado: string;
+  costoHora: number;
+  montoTotal: number;
+  totalPagado: number;
+  saldoPendiente: number;
 }
 
 export async function getReservaciones(): Promise<ReservacionAPI[]> {
@@ -143,11 +147,18 @@ export interface PagoAPI {
   reservacionFolio: string;
   espacioNombre: string;
   solicitanteNombre: string;
+  tipoEvento: string;
+  fechaEvento: string;
+  horaInicio: string;
+  horaFin: string;
   monto: number;
   estado: string;
   metodo: string;
   referencia?: string;
   fechaPago?: string;
+  montoTotal: number;
+  totalPagado: number;
+  saldoPendiente: number;
 }
 
 export async function getPagos(): Promise<PagoAPI[]> {
@@ -156,6 +167,17 @@ export async function getPagos(): Promise<PagoAPI[]> {
 
 export async function getPagoById(id: string): Promise<PagoAPI> {
   return fetchJSON<PagoAPI>(`/api/pagos/${id}`);
+}
+
+export async function updatePagoEstado(id: string, estado: string): Promise<PagoAPI> {
+  const res = await fetch(`${API_BASE}/api/pagos/${id}/estado`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ estado }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new ApiError(res.status, json);
+  return json as PagoAPI;
 }
 
 export interface CreatePagoInput {
@@ -192,8 +214,16 @@ export interface DocumentoAPI {
   reservacionId: string;
   tipo: string;
   nombreArchivo: string;
-  contenidoHtml: string;
+  contenido: string;
   createdAt: string;
+  reservacionFolio: string;
+  espacioNombre: string;
+  solicitanteNombre: string;
+  fechaEvento: string;
+}
+
+export async function getAllDocumentos(): Promise<DocumentoAPI[]> {
+  return fetchJSON<DocumentoAPI[]>("/api/documentos");
 }
 
 export async function generarContrato(reservacionId: string): Promise<DocumentoAPI> {

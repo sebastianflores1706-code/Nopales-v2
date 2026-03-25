@@ -3,10 +3,12 @@ import { espaciosRepository } from "../repositories/espacios.repository";
 import { pagosRepository } from "../repositories/pagos.repository";
 import type { CreateReservacionDto, CambiarEstadoDto } from "../validators/reservaciones.schema";
 
-function enrichReservacion(reservacion: Reservacion) {
-  const pagos = pagosRepository.findByReservacionId(reservacion.id);
+async function enrichReservacion(reservacion: Reservacion) {
+  const pagos = await pagosRepository.findByReservacionId(reservacion.id);
   const pagoEstado = pagos.length > 0 ? pagos[pagos.length - 1].estado : "pendiente";
-  return { ...reservacion, pagoEstado };
+  const totalPagado = pagos.reduce((sum, p) => sum + p.monto, 0);
+  const saldoPendiente = Math.max(0, reservacion.montoTotal - totalPagado);
+  return { ...reservacion, pagoEstado, totalPagado, saldoPendiente };
 }
 
 const ESTADOS_CON_OCUPACION = new Set(["pendiente_revision", "aprobada", "en_uso"]);
@@ -30,19 +32,20 @@ function hayTraslape(
 }
 
 export const reservacionesService = {
-  getAll() {
-    return reservacionesRepository.findAll().map(enrichReservacion);
+  async getAll() {
+    const reservaciones = await reservacionesRepository.findAll();
+    return Promise.all(reservaciones.map(enrichReservacion));
   },
 
-  getById(id: string) {
-    const reservacion = reservacionesRepository.findById(id);
+  async getById(id: string) {
+    const reservacion = await reservacionesRepository.findById(id);
     if (!reservacion) throw new Error("Reservación no encontrada");
     return enrichReservacion(reservacion);
   },
 
-  create(data: CreateReservacionDto) {
+  async create(data: CreateReservacionDto) {
     // Regla 2: el espacio debe existir
-    const espacio = espaciosRepository.findById(data.espacioId);
+    const espacio = await espaciosRepository.findById(data.espacioId);
     if (!espacio) throw new Error("El espacio especificado no existe");
 
     // Regla 3: el espacio no puede estar inactivo
@@ -58,7 +61,7 @@ export const reservacionesService = {
     }
 
     // Regla 5: validar traslape de horario
-    const reservacionesMismoDia = reservacionesRepository.findByEspacioFecha(
+    const reservacionesMismoDia = await reservacionesRepository.findByEspacioFecha(
       data.espacioId,
       data.fecha
     );
@@ -78,8 +81,8 @@ export const reservacionesService = {
     return reservacionesRepository.create(data, espacio.nombre);
   },
 
-  cambiarEstado(id: string, data: CambiarEstadoDto) {
-    const reservacion = reservacionesRepository.findById(id);
+  async cambiarEstado(id: string, data: CambiarEstadoDto) {
+    const reservacion = await reservacionesRepository.findById(id);
     if (!reservacion) throw new Error("Reservación no encontrada");
 
     const transicionesPermitidas = TRANSICIONES_VALIDAS[reservacion.estado] ?? [];
@@ -87,6 +90,17 @@ export const reservacionesService = {
       throw new Error(
         `Transición inválida: no se puede pasar de "${reservacion.estado}" a "${data.estado}"`
       );
+    }
+
+    // Regla extra: cancelar una reservación aprobada solo es válido
+    // si el evento aún no ha iniciado.
+    if (reservacion.estado === "aprobada" && data.estado === "cancelada") {
+      const inicioEvento = new Date(`${reservacion.fecha}T${reservacion.horaInicio}:00`);
+      if (new Date() >= inicioEvento) {
+        throw new Error(
+          "No se puede cancelar una reservación aprobada cuyo evento ya inició o ya pasó"
+        );
+      }
     }
 
     return reservacionesRepository.updateEstado(id, data.estado);

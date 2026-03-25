@@ -10,6 +10,7 @@ export const createPagoSchema = z.object({
   estado: estadoPagoEnum.default("pendiente"),
   metodo: metodoPagoEnum,
   referencia: z.string().optional(),
+  fechaPago: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Formato de fecha inválido (YYYY-MM-DD)").optional(),
 });
 
 export const cambiarEstadoPagoSchema = z.object({

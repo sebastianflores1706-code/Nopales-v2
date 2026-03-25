@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-
+import pool from "./lib/db";
 import espaciosRoutes from "./routes/espacios.routes";
 import reservacionesRoutes from "./routes/reservaciones.routes";
 import pagosRoutes from "./routes/pagos.routes";
@@ -15,7 +15,17 @@ app.get("/", (_req, res) => {
   res.send("Backend Nopales activo");
 });
 
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", async (_req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT 1 as ok");
+    res.json({ ok: true, db: rows });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, error: "DB connection failed" });
+  }
+});
+
+app.get("/api/health-basic", (_req, res) => {
   res.json({ ok: true, message: "API funcionando" });
 });
 

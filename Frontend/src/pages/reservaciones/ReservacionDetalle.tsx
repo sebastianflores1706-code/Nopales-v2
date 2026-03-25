@@ -47,8 +47,14 @@ const ReservacionDetalle = () => {
     onSuccess: (_, estado) => {
       queryClient.invalidateQueries({ queryKey: ["reservacion", id] });
       queryClient.invalidateQueries({ queryKey: ["reservaciones"] });
-      const label = estado === "aprobada" ? "aprobada" : "rechazada";
-      toast.success(`Solicitud ${label} correctamente`);
+      const labels: Record<string, string> = {
+        aprobada:  "aprobada",
+        rechazada: "rechazada",
+        cancelada: "cancelada",
+        en_uso:    "marcada como en uso",
+        finalizada: "finalizada",
+      };
+      toast.success(`Solicitud ${labels[estado] ?? estado} correctamente`);
     },
     onError: (err) => {
       const mensaje = err instanceof ApiError
@@ -224,7 +230,13 @@ const ReservacionDetalle = () => {
                 </>
               )}
               {reservacion.estado === "aprobada" && (
-                <Button size="sm" variant="outline" className="w-full gap-2 text-destructive hover:text-destructive" onClick={() => toast.success("Reservación cancelada")}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full gap-2 text-destructive hover:text-destructive"
+                  disabled={cambiarEstadoMutation.isPending}
+                  onClick={() => cambiarEstadoMutation.mutate("cancelada")}
+                >
                   <Ban className="h-4 w-4" />
                   Cancelar reservación
                 </Button>
@@ -291,7 +303,7 @@ const ReservacionDetalle = () => {
             <DialogTitle>{docViewer?.nombreArchivo}</DialogTitle>
           </DialogHeader>
           <iframe
-            srcDoc={docViewer?.contenidoHtml ?? ""}
+            srcDoc={docViewer?.contenido ?? ""}
             className="flex-1 w-full rounded border border-border"
             title={docViewer?.nombreArchivo}
             sandbox="allow-same-origin"

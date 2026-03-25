@@ -15,6 +15,7 @@ import CalendarioView from "./pages/calendario/CalendarioView.tsx";
 import PagosLista from "./pages/pagos/PagosLista.tsx";
 import PagoDetalle from "./pages/pagos/PagoDetalle.tsx";
 import PagoForm from "./pages/pagos/PagoForm.tsx";
+import ContratosLista from "./pages/contratos/ContratosLista.tsx";
 
 const queryClient = new QueryClient();
 
@@ -37,6 +38,7 @@ const App = () => (
           <Route path="/pagos" element={<PagosLista />} />
           <Route path="/pagos/nuevo" element={<PagoForm />} />
           <Route path="/pagos/:id" element={<PagoDetalle />} />
+          <Route path="/contratos" element={<ContratosLista />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

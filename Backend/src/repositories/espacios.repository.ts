@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import pool from "../lib/db";
 import type { CreateEspacioDto, UpdateEspacioDto } from "../validators/espacios.schema";
 
 export interface Espacio {
@@ -14,89 +15,100 @@ export interface Espacio {
   horarioDisponible?: string;
 }
 
-const espacios: Espacio[] = [
-  {
-    id: "ESP-001",
-    nombre: "Plaza Central",
-    tipo: "plaza",
-    ubicacion: "Centro Histórico, Calle Principal #1",
-    capacidad: 500,
-    costoHora: 2500,
-    estado: "activo",
-  },
-  {
-    id: "ESP-002",
-    nombre: "Auditorio Municipal",
-    tipo: "auditorio",
-    ubicacion: "Av. Independencia #450, Col. Centro",
-    capacidad: 350,
-    costoHora: 3500,
-    estado: "activo",
-  },
-  {
-    id: "ESP-003",
-    nombre: "Parque Bicentenario",
-    tipo: "parque",
-    ubicacion: "Blvd. de la Paz #200, Fracc. Las Flores",
-    capacidad: 300,
-    costoHora: 1800,
-    estado: "en_proceso",
-  },
-  {
-    id: "ESP-004",
-    nombre: "Salón de Usos Múltiples",
-    tipo: "salon",
-    ubicacion: "Calle Morelos #78, Col. Centro",
-    capacidad: 150,
-    costoHora: 1200,
-    estado: "activo",
-  },
-  {
-    id: "ESP-005",
-    nombre: "Cancha Deportiva Norte",
-    tipo: "cancha",
-    ubicacion: "Av. del Deporte #15, Col. Norte",
-    capacidad: 200,
-    costoHora: 800,
-    estado: "activo",
-  },
-  {
-    id: "ESP-006",
-    nombre: "Centro Cultural Reforma",
-    tipo: "centro_cultural",
-    ubicacion: "Calle Reforma #320, Col. Juárez",
-    capacidad: 120,
-    costoHora: 2000,
-    estado: "inactivo",
-  },
-];
+// Mapea una fila de MySQL al tipo Espacio del dominio.
+// Necesario porque MySQL usa snake_case y el dominio usa camelCase.
+function toEspacio(row: Record<string, unknown>): Espacio {
+  return {
+    id:                 row.id as string,
+    nombre:             row.nombre as string,
+    tipo:               row.tipo as string,
+    ubicacion:          row.ubicacion as string,
+    capacidad:          row.capacidad as number,
+    costoHora:          row.costo_hora as number,
+    estado:             row.estado as string,
+    descripcion:        row.descripcion as string | undefined,
+    reglas:             row.reglas as string | undefined,
+    horarioDisponible:  row.horario_disponible as string | undefined,
+  };
+}
 
 export const espaciosRepository = {
-  findAll(): Espacio[] {
-    return espacios;
+  async findAll(): Promise<Espacio[]> {
+    const [rows] = await pool.query("SELECT * FROM espacios ORDER BY creado_en ASC");
+    return (rows as Record<string, unknown>[]).map(toEspacio);
   },
 
-  findById(id: string): Espacio | undefined {
-    return espacios.find((e) => e.id === id);
+  async findById(id: string): Promise<Espacio | undefined> {
+    const [rows] = await pool.query(
+      "SELECT * FROM espacios WHERE id = ?",
+      [id]
+    );
+    const list = rows as Record<string, unknown>[];
+    if (list.length === 0) return undefined;
+    return toEspacio(list[0]);
   },
 
-  create(data: CreateEspacioDto): Espacio {
-    const nuevo: Espacio = { id: randomUUID(), ...data };
-    espacios.push(nuevo);
-    return nuevo;
+  async create(data: CreateEspacioDto): Promise<Espacio> {
+    const id = randomUUID();
+    await pool.query(
+      `INSERT INTO espacios
+        (id, nombre, tipo, ubicacion, capacidad, costo_hora, estado, descripcion, reglas, horario_disponible)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        data.nombre,
+        data.tipo,
+        data.ubicacion,
+        data.capacidad,
+        data.costoHora,
+        data.estado ?? "activo",
+        data.descripcion   ?? null,
+        data.reglas        ?? null,
+        data.horarioDisponible ?? null,
+      ]
+    );
+    return (await this.findById(id))!;
   },
 
-  update(id: string, data: UpdateEspacioDto): Espacio | undefined {
-    const index = espacios.findIndex((e) => e.id === id);
-    if (index === -1) return undefined;
-    espacios[index] = { ...espacios[index], ...data };
-    return espacios[index];
+  async update(id: string, data: UpdateEspacioDto): Promise<Espacio | undefined> {
+    // Construye dinámicamente solo las columnas que vienen en el payload.
+    const columnMap: Record<string, string> = {
+      nombre:            "nombre",
+      tipo:              "tipo",
+      ubicacion:         "ubicacion",
+      capacidad:         "capacidad",
+      costoHora:         "costo_hora",
+      estado:            "estado",
+      descripcion:       "descripcion",
+      reglas:            "reglas",
+      horarioDisponible: "horario_disponible",
+    };
+
+    const sets: string[] = [];
+    const values: unknown[] = [];
+
+    for (const [key, col] of Object.entries(columnMap)) {
+      if (key in data) {
+        sets.push(`${col} = ?`);
+        values.push((data as Record<string, unknown>)[key]);
+      }
+    }
+
+    if (sets.length === 0) return this.findById(id);
+
+    values.push(id);
+    await pool.query(
+      `UPDATE espacios SET ${sets.join(", ")} WHERE id = ?`,
+      values
+    );
+    return this.findById(id);
   },
 
-  delete(id: string): boolean {
-    const index = espacios.findIndex((e) => e.id === id);
-    if (index === -1) return false;
-    espacios.splice(index, 1);
-    return true;
+  async delete(id: string): Promise<boolean> {
+    const [result] = await pool.query(
+      "DELETE FROM espacios WHERE id = ?",
+      [id]
+    );
+    return (result as { affectedRows: number }).affectedRows > 0;
   },
 };

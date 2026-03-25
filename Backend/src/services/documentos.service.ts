@@ -7,7 +7,6 @@ import type { GenerarContratoDto } from "../validators/documentos.schema";
 
 // ---------------------------------------------------------------------------
 // Generación de contenido HTML del contrato
-// Cuando se quiera PDF real, solo se reemplaza esta función.
 // ---------------------------------------------------------------------------
 function generarContenidoContrato(reservacion: Reservacion, pago: Pago): string {
   return `<!DOCTYPE html>
@@ -46,7 +45,7 @@ function generarContenidoContrato(reservacion: Reservacion, pago: Pago): string 
 
   <h2>Condiciones de pago</h2>
   <table>
-    <tr><td>Monto total</td><td>$${pago.monto.toLocaleString("es-MX")}</td></tr>
+    <tr><td>Monto</td><td>$${pago.monto.toLocaleString("es-MX")}</td></tr>
     <tr><td>Método de pago</td><td>${pago.metodo}</td></tr>
     <tr><td>Estado del pago</td><td>${pago.estado}</td></tr>
     ${pago.referencia ? `<tr><td>Referencia</td><td>${pago.referencia}</td></tr>` : ""}
@@ -75,16 +74,36 @@ function generarContenidoContrato(reservacion: Reservacion, pago: Pago): string 
 }
 
 // ---------------------------------------------------------------------------
+// Enriquece un documento con datos de su reservación
+// ---------------------------------------------------------------------------
+async function enrich(doc: Awaited<ReturnType<typeof documentosRepository.findById>>) {
+  if (!doc) return doc;
+  const reservacion = await reservacionesRepository.findById(doc.reservacionId);
+  return {
+    ...doc,
+    reservacionFolio:  reservacion?.folio             ?? "—",
+    espacioNombre:     reservacion?.espacioNombre      ?? "—",
+    solicitanteNombre: reservacion?.solicitanteNombre  ?? "—",
+    fechaEvento:       reservacion?.fecha              ?? "—",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 export const documentosService = {
-  getByReservacionId(reservacionId: string) {
+  async getAll() {
+    const docs = await documentosRepository.findAll();
+    return Promise.all(docs.map((d) => enrich(d)));
+  },
+
+  async getByReservacionId(reservacionId: string) {
     return documentosRepository.findByReservacionId(reservacionId);
   },
 
-  generarContrato(data: GenerarContratoDto) {
+  async generarContrato(data: GenerarContratoDto) {
     // Regla 1: la reservación debe existir
-    const reservacion = reservacionesRepository.findById(data.reservacionId);
+    const reservacion = await reservacionesRepository.findById(data.reservacionId);
     if (!reservacion) throw new Error("La reservación especificada no existe");
 
     // Regla 2: la reservación debe estar aprobada
@@ -95,28 +114,28 @@ export const documentosService = {
     }
 
     // Regla 3: debe existir al menos un pago asociado
-    const pagos = pagosRepository.findByReservacionId(data.reservacionId);
+    const pagos = await pagosRepository.findByReservacionId(data.reservacionId);
     if (pagos.length === 0) {
       throw new Error("No existe un pago registrado para esta reservación");
     }
 
     // Regla 4: no generar duplicado
-    const existentes = documentosRepository.findByReservacionId(data.reservacionId);
+    const existentes = await documentosRepository.findByReservacionId(data.reservacionId);
     const contratoExistente = existentes.find((d) => d.tipo === "contrato");
     if (contratoExistente) {
       return { duplicado: true, documento: contratoExistente };
     }
 
-    // Generar contenido HTML del contrato
+    // Generar contenido HTML del contrato usando el pago más reciente
     const pago = pagos[pagos.length - 1];
-    const contenidoHtml = generarContenidoContrato(reservacion, pago);
-    const nombreArchivo = `contrato-${reservacion.folio}-${Date.now()}.html`;
+    const contenido = generarContenidoContrato(reservacion, pago);
+    const nombreArchivo = `contrato-${reservacion.folio}.html`;
 
-    const documento = documentosRepository.create({
+    const documento = await documentosRepository.create({
       reservacionId: data.reservacionId,
       tipo: "contrato",
       nombreArchivo,
-      contenidoHtml,
+      contenido,
     });
 
     return { duplicado: false, documento };

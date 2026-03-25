@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, MapPin, CalendarCheck, Calendar, CreditCard,
-  FileText, AlertTriangle, Wrench, Users, BarChart3
+  FileText, Wrench, Users, BarChart3
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -15,8 +15,7 @@ const navItems = [
   { title: "Reservaciones", url: "/reservaciones", icon: CalendarCheck },
   { title: "Calendario", url: "/calendario", icon: Calendar },
   { title: "Pagos", url: "/pagos", icon: CreditCard },
-  { title: "Documentos", url: "/documentos", icon: FileText },
-  { title: "Incidencias", url: "/incidencias", icon: AlertTriangle },
+  { title: "Contratos", url: "/contratos", icon: FileText },
   { title: "Mantenimiento", url: "/mantenimiento", icon: Wrench },
   { title: "Usuarios", url: "/usuarios", icon: Users },
   { title: "Reportes", url: "/reportes", icon: BarChart3 },

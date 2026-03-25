@@ -2,30 +2,47 @@ import { pagosRepository, type Pago } from "../repositories/pagos.repository";
 import { reservacionesRepository } from "../repositories/reservaciones.repository";
 import type { CreatePagoDto, CambiarEstadoPagoDto } from "../validators/pagos.schema";
 
-function enrich(pago: Pago) {
-  const reservacion = reservacionesRepository.findById(pago.reservacionId);
+async function enrich(pago: Pago) {
+  const [reservacion, todosPagos] = await Promise.all([
+    reservacionesRepository.findById(pago.reservacionId),
+    pagosRepository.findByReservacionId(pago.reservacionId),
+  ]);
+
+  const montoTotal   = reservacion?.montoTotal ?? 0;
+  const totalPagado  = todosPagos.reduce((sum, p) => sum + p.monto, 0);
+  const saldoPendiente = Math.max(0, montoTotal - totalPagado);
+
   return {
     ...pago,
-    reservacionFolio: reservacion?.folio ?? "—",
-    espacioNombre: reservacion?.espacioNombre ?? "—",
-    solicitanteNombre: reservacion?.solicitanteNombre ?? "—",
+    reservacionFolio:  reservacion?.folio             ?? "—",
+    espacioNombre:     reservacion?.espacioNombre      ?? "—",
+    solicitanteNombre: reservacion?.solicitanteNombre  ?? "—",
+    tipoEvento:        reservacion?.tipoEvento         ?? "—",
+    fechaEvento:       reservacion?.fecha              ?? "—",
+    horaInicio:        reservacion?.horaInicio         ?? "—",
+    horaFin:           reservacion?.horaFin            ?? "—",
+    reservacionId:     pago.reservacionId,
+    montoTotal,
+    totalPagado,
+    saldoPendiente,
   };
 }
 
 export const pagosService = {
-  getAll() {
-    return pagosRepository.findAll().map(enrich);
+  async getAll() {
+    const pagos = await pagosRepository.findAll();
+    return Promise.all(pagos.map(enrich));
   },
 
-  getById(id: string) {
-    const pago = pagosRepository.findById(id);
+  async getById(id: string) {
+    const pago = await pagosRepository.findById(id);
     if (!pago) throw new Error("Pago no encontrado");
     return enrich(pago);
   },
 
-  create(data: CreatePagoDto) {
+  async create(data: CreatePagoDto) {
     // Regla 1: la reservación debe existir
-    const reservacion = reservacionesRepository.findById(data.reservacionId);
+    const reservacion = await reservacionesRepository.findById(data.reservacionId);
     if (!reservacion) throw new Error("La reservación especificada no existe");
 
     // Regla 2: la reservación debe estar aprobada
@@ -35,11 +52,24 @@ export const pagosService = {
       );
     }
 
-    return pagosRepository.create(data);
+    const nuevoPago = await pagosRepository.create(data);
+
+    // Regla 3: si el total acumulado ya cubre el monto completo de la reservación,
+    // marcar todos los pagos anteriores "pendiente" como "pagado".
+    // Esto preserva el historial sin dejar inconsistencias de estado.
+    if (reservacion.montoTotal > 0) {
+      const todosPagos = await pagosRepository.findByReservacionId(data.reservacionId);
+      const totalPagado = todosPagos.reduce((sum, p) => sum + p.monto, 0);
+      if (totalPagado >= reservacion.montoTotal) {
+        await pagosRepository.markAllPendienteAsPagado(data.reservacionId);
+      }
+    }
+
+    return nuevoPago;
   },
 
-  cambiarEstado(id: string, data: CambiarEstadoPagoDto) {
-    const pago = pagosRepository.findById(id);
+  async cambiarEstado(id: string, data: CambiarEstadoPagoDto) {
+    const pago = await pagosRepository.findById(id);
     if (!pago) throw new Error("Pago no encontrado");
 
     return pagosRepository.updateEstado(id, data.estado);
