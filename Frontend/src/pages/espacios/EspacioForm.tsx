@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Save, Upload } from "lucide-react";
+import { ArrowLeft, Save, Upload, X, ImageIcon } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { PageHeader } from "@/components/admin/PageHeader";
@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { createEspacio, updateEspacio, getEspacioById, ApiError } from "@/lib/api";
+import { createEspacio, updateEspacio, getEspacioById, uploadImagenesEspacio, deleteImagenEspacio, getImagenUrl, ApiError } from "@/lib/api";
 
 const tiposOptions = [
   { label: "Plaza", value: "plaza" },
@@ -27,7 +27,6 @@ const tiposOptions = [
 const estadoOptions = [
   { label: "Activo", value: "activo" },
   { label: "Inactivo", value: "inactivo" },
-  { label: "En mantenimiento", value: "en_proceso" },
 ];
 
 const EspacioForm = () => {
@@ -37,6 +36,7 @@ const EspacioForm = () => {
 
   const [tipo, setTipo] = useState("");
   const [estado, setEstado] = useState("activo");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Cargar datos actuales al editar
   const { data: espacioActual, isLoading: isQueryLoading, error: queryError } = useQuery({
@@ -65,6 +65,32 @@ const EspacioForm = () => {
   }, [queryError, navigate]);
 
   const queryClient = useQueryClient();
+
+  const uploadMutation = useMutation({
+    mutationFn: (files: File[]) => uploadImagenesEspacio(id!, files),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["espacio", id] });
+      toast.success("Imágenes subidas correctamente");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+    onError: () => toast.error("Error al subir las imágenes"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (imagenId: string) => deleteImagenEspacio(id!, imagenId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["espacio", id] });
+      toast.success("Imagen eliminada");
+    },
+    onError: () => toast.error("Error al eliminar la imagen"),
+  });
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    uploadMutation.mutate(files);
+  };
+
   const mutation = useMutation({
     mutationFn: (payload: Parameters<typeof createEspacio>[0]) =>
       isEditing ? updateEspacio(id!, payload) : createEspacio(payload),
@@ -224,20 +250,71 @@ const EspacioForm = () => {
 
             <Separator />
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               <Label>Imágenes del espacio</Label>
-              <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
-                <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                <p className="text-sm text-muted-foreground">
-                  Arrastra imágenes aquí o haz clic para seleccionar
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  PNG, JPG hasta 5MB. Máximo 6 imágenes.
-                </p>
-                <Button type="button" variant="outline" size="sm" className="mt-3">
-                  Seleccionar archivos
-                </Button>
-              </div>
+
+              {isEditing ? (
+                <>
+                  {/* Grid de imágenes existentes */}
+                  {(espacioActual?.imagenes ?? []).length > 0 && (
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                      {(espacioActual?.imagenes ?? []).map((img) => (
+                        <div key={img.id} className="relative group aspect-square rounded-lg overflow-hidden border border-border bg-muted">
+                          <img
+                            src={getImagenUrl(img.url)}
+                            alt="Imagen del espacio"
+                            className="w-full h-full object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => deleteMutation.mutate(img.id)}
+                            disabled={deleteMutation.isPending}
+                            className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Zona de subida */}
+                  {(espacioActual?.imagenes ?? []).length < 6 && (
+                    <div
+                      className="border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      {uploadMutation.isPending ? (
+                        <p className="text-sm text-muted-foreground">Subiendo imágenes...</p>
+                      ) : (
+                        <>
+                          <Upload className="h-7 w-7 mx-auto text-muted-foreground mb-2" />
+                          <p className="text-sm text-muted-foreground">Haz clic para seleccionar imágenes</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            PNG, JPG, WEBP hasta 5 MB · Máximo {6 - (espacioActual?.imagenes ?? []).length} más
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.webp"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                </>
+              ) : (
+                <div className="border-2 border-dashed border-border rounded-lg p-6 text-center bg-muted/30">
+                  <ImageIcon className="h-7 w-7 mx-auto text-muted-foreground mb-2" />
+                  <p className="text-sm text-muted-foreground">
+                    Las imágenes se pueden agregar una vez que el espacio haya sido creado.
+                  </p>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

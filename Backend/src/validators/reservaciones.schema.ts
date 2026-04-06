@@ -5,7 +5,6 @@ export const estadoReservacionEnum = z.enum([
   "aprobada",
   "rechazada",
   "cancelada",
-  "en_uso",
   "finalizada",
 ]);
 
@@ -21,6 +20,7 @@ export const createReservacionSchema = z.object({
   horaInicio: z.string().regex(horaRegex, "La hora de inicio debe tener formato HH:MM"),
   horaFin: z.string().regex(horaRegex, "La hora de fin debe tener formato HH:MM"),
   asistentes: z.number().int().positive("El número de asistentes debe ser positivo"),
+  descripcionEvento: z.string().optional(),
   pagoEstado: pagoEstadoEnum.default("pendiente"),
 }).refine((d) => d.horaInicio < d.horaFin, {
   message: "La hora de fin debe ser posterior a la hora de inicio",

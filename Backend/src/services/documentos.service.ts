@@ -4,11 +4,31 @@ import { pagosRepository } from "../repositories/pagos.repository";
 import type { Reservacion } from "../repositories/reservaciones.repository";
 import type { Pago } from "../repositories/pagos.repository";
 import type { GenerarContratoDto } from "../validators/documentos.schema";
+import { htmlToPdf } from "../lib/pdf";
 
 // ---------------------------------------------------------------------------
 // Generación de contenido HTML del contrato
 // ---------------------------------------------------------------------------
-function generarContenidoContrato(reservacion: Reservacion, pago: Pago): string {
+function generarContenidoContrato(reservacion: Reservacion, pagos: Pago[]): string {
+  const pagosValidos = pagos.filter((p) => p.estado !== "cancelado");
+  const totalPagado = pagosValidos.reduce((s, p) => s + p.monto, 0);
+  const saldoPendiente = Math.max(0, reservacion.montoTotal - totalPagado);
+  const estadoPago =
+    totalPagado === 0 ? "Pendiente" : saldoPendiente > 0 ? "Anticipo registrado" : "Pagado";
+
+  const filasPagos = pagosValidos
+    .map(
+      (p, i) =>
+        `<tr>
+          <td>${i + 1}</td>
+          <td>$${p.monto.toLocaleString("es-MX")}</td>
+          <td>${p.metodo}</td>
+          <td>${p.fechaPago ?? "—"}</td>
+          <td>${p.referencia ?? "—"}</td>
+        </tr>`
+    )
+    .join("");
+
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -19,8 +39,11 @@ function generarContenidoContrato(reservacion: Reservacion, pago: Pago): string 
     h1 { text-align: center; font-size: 16px; text-transform: uppercase; letter-spacing: 1px; }
     h2 { font-size: 13px; text-transform: uppercase; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 24px; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    td { padding: 5px 8px; vertical-align: top; }
+    td, th { padding: 5px 8px; vertical-align: top; text-align: left; }
     td:first-child { font-weight: bold; width: 40%; color: #444; }
+    th { background: #f4f4f4; font-size: 11px; text-transform: uppercase; }
+    .resumen td:first-child { font-weight: bold; width: 50%; color: #444; }
+    .total-row td { font-weight: bold; border-top: 1px solid #ccc; }
     .footer { margin-top: 60px; display: flex; justify-content: space-between; }
     .firma { text-align: center; width: 40%; border-top: 1px solid #000; padding-top: 6px; font-size: 11px; }
   </style>
@@ -43,14 +66,24 @@ function generarContenidoContrato(reservacion: Reservacion, pago: Pago): string 
     <tr><td>Asistentes estimados</td><td>${reservacion.asistentes} personas</td></tr>
   </table>
 
-  <h2>Condiciones de pago</h2>
-  <table>
-    <tr><td>Monto</td><td>$${pago.monto.toLocaleString("es-MX")}</td></tr>
-    <tr><td>Método de pago</td><td>${pago.metodo}</td></tr>
-    <tr><td>Estado del pago</td><td>${pago.estado}</td></tr>
-    ${pago.referencia ? `<tr><td>Referencia</td><td>${pago.referencia}</td></tr>` : ""}
-    ${pago.fechaPago ? `<tr><td>Fecha de pago</td><td>${pago.fechaPago}</td></tr>` : ""}
+  <h2>Resumen financiero</h2>
+  <table class="resumen">
+    <tr><td>Monto total de la reservación</td><td>$${reservacion.montoTotal.toLocaleString("es-MX")}</td></tr>
+    <tr><td>Total abonado</td><td>$${totalPagado.toLocaleString("es-MX")}</td></tr>
+    <tr><td>Saldo pendiente</td><td>$${saldoPendiente.toLocaleString("es-MX")}</td></tr>
+    <tr><td>Estado del pago</td><td>${estadoPago}</td></tr>
   </table>
+
+  ${pagosValidos.length > 0 ? `
+  <h2>Detalle de pagos registrados</h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Monto</th><th>Método</th><th>Fecha</th><th>Referencia</th></tr>
+    </thead>
+    <tbody>
+      ${filasPagos}
+    </tbody>
+  </table>` : ""}
 
   <h2>Cláusulas generales</h2>
   <p>1. El solicitante se compromete a respetar el aforo máximo permitido del espacio.</p>
@@ -101,6 +134,11 @@ export const documentosService = {
     return documentosRepository.findByReservacionId(reservacionId);
   },
 
+  async getMios(usuarioId: string) {
+    const docs = await documentosRepository.findByUsuarioId(usuarioId);
+    return Promise.all(docs.map((d) => enrich(d)));
+  },
+
   async generarContrato(data: GenerarContratoDto) {
     // Regla 1: la reservación debe existir
     const reservacion = await reservacionesRepository.findById(data.reservacionId);
@@ -113,10 +151,15 @@ export const documentosService = {
       );
     }
 
-    // Regla 3: debe existir al menos un pago asociado
+    // Regla 3: el pago debe estar completado (saldo pendiente = 0)
     const pagos = await pagosRepository.findByReservacionId(data.reservacionId);
-    if (pagos.length === 0) {
-      throw new Error("No existe un pago registrado para esta reservación");
+    const pagosValidos = pagos.filter((p) => p.estado !== "cancelado");
+    const totalPagado = pagosValidos.reduce((s, p) => s + p.monto, 0);
+    const saldoPendiente = Math.max(0, reservacion.montoTotal - totalPagado);
+    if (saldoPendiente > 0) {
+      throw new Error(
+        `No se puede generar el contrato: hay un saldo pendiente de $${saldoPendiente.toLocaleString("es-MX")}`
+      );
     }
 
     // Regla 4: no generar duplicado
@@ -126,9 +169,8 @@ export const documentosService = {
       return { duplicado: true, documento: contratoExistente };
     }
 
-    // Generar contenido HTML del contrato usando el pago más reciente
-    const pago = pagos[pagos.length - 1];
-    const contenido = generarContenidoContrato(reservacion, pago);
+    // Generar contenido HTML con el resumen financiero completo
+    const contenido = generarContenidoContrato(reservacion, pagos);
     const nombreArchivo = `contrato-${reservacion.folio}.html`;
 
     const documento = await documentosRepository.create({
@@ -139,5 +181,18 @@ export const documentosService = {
     });
 
     return { duplicado: false, documento };
+  },
+
+  async generarPdf(documentoId: string) {
+    const doc = await documentosRepository.findById(documentoId);
+    if (!doc) throw new Error("Documento no encontrado");
+
+    // Si ya tiene PDF en disco, devolver sin regenerar
+    if (doc.pdfPath) return doc;
+
+    const pdfFilename = doc.nombreArchivo.replace(/\.html$/, ".pdf");
+    await htmlToPdf(doc.contenido, pdfFilename);
+
+    return documentosRepository.updatePdfPath(documentoId, pdfFilename);
   },
 };

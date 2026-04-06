@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
-import { Plus, Eye, Calendar, ClipboardList, DollarSign, Clock } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Plus, Eye, Calendar, ClipboardList, DollarSign, Clock, Banknote, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { PageHeader } from "@/components/admin/PageHeader";
@@ -9,20 +9,44 @@ import { StatusBadge } from "@/components/admin/StatusBadge";
 import { DataTable, Column } from "@/components/admin/DataTable";
 import { StatCard } from "@/components/admin/StatCard";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { estadosReservacion, espaciosFiltro } from "@/data/reservacionesMock";
-import { getReservaciones, type ReservacionAPI } from "@/lib/api";
+import { estadosReservacion } from "@/data/reservacionesMock";
+import { getReservaciones, getEspacios, type ReservacionAPI } from "@/lib/api";
+import { getEstadoVisual } from "@/lib/reservacion-utils";
 
 const ReservacionesLista = () => {
   const navigate = useNavigate();
-  const [search, setSearch] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const search = searchParams.get("q") ?? "";
+  function setSearch(value: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set("q", value); else next.delete("q");
+      return next;
+    });
+  }
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroEspacio, setFiltroEspacio] = useState("todos");
+  const [showFiltros, setShowFiltros] = useState(false);
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
 
   const { data: reservaciones = [] } = useQuery({
     queryKey: ["reservaciones"],
     queryFn: getReservaciones,
   });
+
+  const { data: espacios = [] } = useQuery({
+    queryKey: ["espacios"],
+    queryFn: getEspacios,
+  });
+
+  const espaciosOptions = useMemo(() => [
+    { label: "Todos los espacios", value: "todos" },
+    ...espacios.map((e) => ({ label: e.nombre, value: e.id })),
+  ], [espacios]);
 
   const filtered = useMemo(() => {
     return reservaciones.filter((r) => {
@@ -31,11 +55,22 @@ const ReservacionesLista = () => {
         r.folio.toLowerCase().includes(search.toLowerCase()) ||
         r.solicitanteNombre.toLowerCase().includes(search.toLowerCase()) ||
         r.tipoEvento.toLowerCase().includes(search.toLowerCase());
-      const matchEstado = filtroEstado === "todos" || r.estado === filtroEstado;
+      const matchEstado = filtroEstado === "todos" || getEstadoVisual(r) === filtroEstado;
       const matchEspacio = filtroEspacio === "todos" || r.espacioId === filtroEspacio;
-      return matchSearch && matchEstado && matchEspacio;
+      const matchDesde = !fechaDesde || r.fecha >= fechaDesde;
+      const matchHasta = !fechaHasta || r.fecha <= fechaHasta;
+      return matchSearch && matchEstado && matchEspacio && matchDesde && matchHasta;
     });
-  }, [reservaciones, search, filtroEstado, filtroEspacio]);
+  }, [reservaciones, search, filtroEstado, filtroEspacio, fechaDesde, fechaHasta]);
+
+  const hayFiltrosActivos = filtroEstado !== "todos" || filtroEspacio !== "todos" || !!fechaDesde || !!fechaHasta;
+
+  function limpiarFiltros() {
+    setFiltroEstado("todos");
+    setFiltroEspacio("todos");
+    setFechaDesde("");
+    setFechaHasta("");
+  }
 
   const totalPendientes = reservaciones.filter((r) => r.estado === "pendiente_revision").length;
   const totalAprobadas = reservaciones.filter((r) => r.estado === "aprobada").length;
@@ -75,7 +110,7 @@ const ReservacionesLista = () => {
     {
       key: "estado",
       header: "Estado",
-      render: (item) => <StatusBadge estado={item.estado} />,
+      render: (item) => <StatusBadge estado={getEstadoVisual(item)} />,
     },
     {
       key: "pagoEstado",
@@ -86,14 +121,35 @@ const ReservacionesLista = () => {
       key: "acciones",
       header: "Acciones",
       render: (item) => (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(`/reservaciones/${item.id}`)}>
-              <Eye className="h-4 w-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Ver detalle</TooltipContent>
-        </Tooltip>
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(`/reservaciones/${item.id}`)}>
+                <Eye className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Ver detalle</TooltipContent>
+          </Tooltip>
+          {(item.pagoEstado === "pendiente" || item.pagoEstado === "anticipo") &&
+            item.estado !== "rechazada" &&
+            item.estado !== "cancelada" && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-warning hover:text-warning"
+                  onClick={() => navigate(`/reservaciones/${item.id}`)}
+                >
+                  <Banknote className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {item.pagoEstado === "anticipo" ? "Registrar abono" : "Registrar pago"}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       ),
     },
   ];
@@ -123,9 +179,40 @@ const ReservacionesLista = () => {
         onSearch={setSearch}
         filters={[
           { label: "Estado", options: estadosReservacion, value: filtroEstado, onChange: setFiltroEstado },
-          { label: "Espacio", options: espaciosFiltro, value: filtroEspacio, onChange: setFiltroEspacio },
+          { label: "Espacio", options: espaciosOptions, value: filtroEspacio, onChange: setFiltroEspacio },
         ]}
+        onToggleFiltros={() => setShowFiltros((v) => !v)}
+        filtrosActivos={hayFiltrosActivos}
       />
+
+      {showFiltros && (
+        <div className="mb-4 p-4 rounded-lg border border-border bg-muted/30 flex flex-wrap items-end gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-xs text-muted-foreground">Fecha desde</Label>
+            <Input
+              type="date"
+              className="h-9 text-sm w-40"
+              value={fechaDesde}
+              onChange={(e) => setFechaDesde(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-xs text-muted-foreground">Fecha hasta</Label>
+            <Input
+              type="date"
+              className="h-9 text-sm w-40"
+              value={fechaHasta}
+              onChange={(e) => setFechaHasta(e.target.value)}
+            />
+          </div>
+          {hayFiltrosActivos && (
+            <Button variant="ghost" size="sm" className="h-9 gap-1.5 text-muted-foreground" onClick={limpiarFiltros}>
+              <X className="h-3.5 w-3.5" />
+              Limpiar filtros
+            </Button>
+          )}
+        </div>
+      )}
 
       <DataTable
         columns={columns as any}

@@ -22,9 +22,9 @@ export const estadosReservacion = [
   { label: "Todos", value: "todos" },
   { label: "Pendiente revisión", value: "pendiente_revision" },
   { label: "Aprobada", value: "aprobada" },
+  { label: "En curso", value: "en_curso" },
   { label: "Rechazada", value: "rechazada" },
   { label: "Cancelada", value: "cancelada" },
-  { label: "En uso", value: "en_uso" },
   { label: "Finalizada", value: "finalizada" },
 ];
 

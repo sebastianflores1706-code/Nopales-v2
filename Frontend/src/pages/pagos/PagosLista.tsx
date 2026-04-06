@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Plus, Eye, DollarSign, Clock, XCircle, RotateCcw } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -21,7 +21,15 @@ const metodoPagoLabel: Record<string, string> = {
 
 export default function PagosLista() {
   const navigate = useNavigate();
-  const [search, setSearch] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const search = searchParams.get("q") ?? "";
+  function setSearch(value: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set("q", value); else next.delete("q");
+      return next;
+    });
+  }
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroMetodo, setFiltroMetodo] = useState("todos");
 
@@ -52,21 +60,34 @@ export default function PagosLista() {
   }, [pagos, search, filtroEstado, filtroMetodo]);
 
   const totalIngresos = pagos.filter((p) => p.estado === "pagado").reduce((s, p) => s + p.monto, 0);
-  const totalPendiente = pagos.filter((p) => p.estado === "pendiente").reduce((s, p) => s + p.monto, 0);
-  const countPendientes = reservaciones.filter((r) => r.pagoEstado === "pendiente" && r.estado !== "rechazada" && r.estado !== "cancelada").length;
-  const countReembolsados = pagos.filter((p) => p.estado === "reembolsado").length;
+  // Saldo por cobrar: suma de saldos pendientes reales por reservación (evita duplicados por múltiples pagos)
+  const reservacionesActivas = reservaciones.filter(
+    (r) => r.estado !== "rechazada" && r.estado !== "cancelada"
+  );
+  const totalSaldoPorCobrar = reservacionesActivas.reduce((s, r) => s + (r.saldoPendiente ?? 0), 0);
+  // Pagos pendientes: reservaciones con saldo > 0 (incluye anticipos)
+  const countPendientes = reservacionesActivas.filter(
+    (r) => r.pagoEstado === "pendiente" || r.pagoEstado === "anticipo"
+  ).length;
+  const countReembolsosPendientes = reservaciones.filter(
+    (r) => r.estado === "cancelada" && r.reembolsoEstado === "pendiente"
+  ).length;
 
   const columns: Column<PagoAPI>[] = [
     { key: "id", header: "Folio", render: (p) => <span className="font-mono text-xs font-medium" title={p.id}>{p.id.slice(0, 8)}…</span> },
     { key: "reservacionFolio", header: "Reservación", render: (p) => <span className="font-mono text-xs">{p.reservacionFolio}</span> },
     { key: "espacioNombre", header: "Espacio", render: (p) => <span className="text-sm">{p.espacioNombre}</span> },
     { key: "solicitanteNombre", header: "Solicitante", render: (p) => <span className="max-w-[140px] truncate block">{p.solicitanteNombre}</span> },
-    { key: "monto", header: "Total", render: (p) => <span className="font-medium">${p.monto.toLocaleString("es-MX")}</span> },
-    { key: "referencia", header: "Anticipo", render: () => <span className="text-muted-foreground">—</span> },
-    { key: "fechaPago", header: "Saldo", render: () => <span className="text-muted-foreground">—</span> },
+    { key: "monto", header: "Abono", render: (p) => <span className="font-medium">${p.monto.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span> },
+    { key: "totalPagado", header: "Total abonado", render: (p) => <span className="text-sm text-green-600 font-medium">${p.totalPagado.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span> },
+    { key: "saldoPendiente", header: "Saldo pendiente", render: (p) => (
+      <span className={`text-sm font-medium ${p.saldoPendiente > 0 ? "text-destructive" : "text-muted-foreground"}`}>
+        {p.saldoPendiente > 0 ? `$${p.saldoPendiente.toLocaleString("es-MX", { minimumFractionDigits: 2 })}` : "—"}
+      </span>
+    )},
     { key: "metodo", header: "Método", render: (p) => <span className="text-xs">{metodoPagoLabel[p.metodo] ?? p.metodo}</span> },
     { key: "fechaPago", header: "Fecha", render: (p) => p.fechaPago ? <span className="text-xs">{p.fechaPago}</span> : <span className="text-muted-foreground text-xs">Sin pago</span> },
-    { key: "estado", header: "Estado", render: (p) => <StatusBadge estado={p.estado} /> },
+    { key: "estadoFinanciero", header: "Estado", render: (p) => <StatusBadge estado={p.estadoFinanciero} /> },
     { key: "id", header: "Acciones", render: (p) => (
       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => navigate(`/pagos/${p.id}`)}>
         <Eye className="h-3.5 w-3.5" />
@@ -88,9 +109,9 @@ export default function PagosLista() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard title="Ingresos cobrados" value={`$${totalIngresos.toLocaleString("es-MX")}`} icon={DollarSign} trend={{ value: 12, positive: true }} />
-        <StatCard title="Pagos pendientes" value={countPendientes} icon={Clock} trend={{ value: countPendientes, positive: false }} />
-        <StatCard title="Saldo por cobrar" value={`$${totalPendiente.toLocaleString("es-MX")}`} icon={XCircle} />
-        <StatCard title="Reembolsos" value={countReembolsados} icon={RotateCcw} />
+        <StatCard title="Reserv. con saldo pendiente" value={countPendientes} icon={Clock} trend={{ value: countPendientes, positive: false }} />
+        <StatCard title="Saldo por cobrar" value={`$${totalSaldoPorCobrar.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`} icon={XCircle} />
+        <StatCard title="Reembolsos pendientes" value={countReembolsosPendientes} icon={RotateCcw} />
       </div>
 
       <FilterBar

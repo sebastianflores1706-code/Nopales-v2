@@ -12,10 +12,17 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   cerrada:            { label: "Cerrada",           className: "bg-muted text-muted-foreground border-border" },
   cancelado:          { label: "Cancelado",         className: "bg-muted text-muted-foreground border-border" },
   activo:             { label: "Activo",            className: "bg-success/15 text-success border-success/20" },
+  en_mantenimiento:   { label: "En mantenimiento",  className: "bg-warning/15 text-warning border-warning/20" },
   inactivo:           { label: "Inactivo",          className: "bg-muted text-muted-foreground border-border" },
   realizada:          { label: "Realizada",         className: "bg-success/15 text-success border-success/20" },
+  en_curso:           { label: "En curso",          className: "bg-success/15 text-success border-success/20" },
   pagado:             { label: "Pagado",            className: "bg-success/15 text-success border-success/20" },
+  anticipo:           { label: "Anticipo",          className: "bg-warning/15 text-warning border-warning/20" },
   reembolsado:        { label: "Reembolsado",       className: "bg-info/15 text-info border-info/20" },
+  // Estados de reembolso
+  no_aplica:           { label: "Sin reembolso",        className: "bg-muted text-muted-foreground border-border" },
+  reembolso_pendiente: { label: "Reembolso pendiente",  className: "bg-warning/15 text-warning border-warning/20" },
+  reembolso_procesado: { label: "Reembolso procesado",  className: "bg-success/15 text-success border-success/20" },
   // Estados de reservación (backend)
   pendiente_revision: { label: "Pendiente revisión", className: "bg-warning/15 text-warning border-warning/20" },
   aprobada:           { label: "Aprobada",          className: "bg-success/15 text-success border-success/20" },

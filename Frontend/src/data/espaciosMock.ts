@@ -46,7 +46,7 @@ export const estadosEspacio = [
   { label: "Todos", value: "todos" },
   { label: "Activo", value: "activo" },
   { label: "Inactivo", value: "inactivo" },
-  { label: "En mantenimiento", value: "en_proceso" },
+  { label: "En mantenimiento", value: "en_mantenimiento" },
 ];
 
 export const espaciosMock: Espacio[] = [

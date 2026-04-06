@@ -11,31 +11,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  reservacionesEspacioMock,
-  historialReservacionesMock,
-  incidenciasEspacioMock,
-  type ReservacionEspacio,
-  type IncidenciaEspacio,
-} from "@/data/espaciosMock";
-import { getEspacioById, ApiError } from "@/lib/api";
+import { getEspacioById, getMantenimientos, getImagenUrl, getReservaciones, ApiError, type ReservacionAPI } from "@/lib/api";
+import { getEstadoVisualEspacio } from "@/lib/espacio-utils";
 
-const reservacionColumns: Column<ReservacionEspacio>[] = [
-  { key: "id", header: "ID" },
-  { key: "solicitante", header: "Solicitante" },
+const reservacionColumns: Column<ReservacionAPI>[] = [
+  { key: "folio", header: "Folio" },
+  { key: "solicitanteNombre", header: "Solicitante" },
   { key: "fecha", header: "Fecha" },
-  { key: "horario", header: "Horario" },
-  { key: "tipo", header: "Tipo" },
+  {
+    key: "horaInicio",
+    header: "Horario",
+    render: (item) => `${item.horaInicio} - ${item.horaFin}`,
+  },
+  { key: "tipoEvento", header: "Tipo de evento" },
   { key: "estado", header: "Estado", render: (item) => <StatusBadge estado={item.estado} /> },
 ];
 
-const incidenciaColumns: Column<IncidenciaEspacio>[] = [
-  { key: "id", header: "ID" },
-  { key: "descripcion", header: "Descripción" },
-  { key: "reportadoPor", header: "Reportado por" },
-  { key: "fecha", header: "Fecha" },
-  { key: "estado", header: "Estado", render: (item) => <StatusBadge estado={item.estado} /> },
-];
 
 const EspacioDetalle = () => {
   const { id } = useParams();
@@ -45,6 +36,17 @@ const EspacioDetalle = () => {
     queryKey: ["espacio", id],
     queryFn: () => getEspacioById(id!),
     enabled: !!id,
+  });
+
+  const { data: mantenimientos = [] } = useQuery({
+    queryKey: ["mantenimientos"],
+    queryFn: getMantenimientos,
+    refetchInterval: 60_000,
+  });
+
+  const { data: todasReservaciones = [] } = useQuery({
+    queryKey: ["reservaciones"],
+    queryFn: getReservaciones,
   });
 
   if (isLoading) {
@@ -75,9 +77,11 @@ const EspacioDetalle = () => {
     );
   }
 
-  const proximasReservaciones = reservacionesEspacioMock[espacio.id] ?? [];
-  const historial = historialReservacionesMock[espacio.id] ?? [];
-  const incidencias = incidenciasEspacioMock[espacio.id] ?? [];
+  const hoy = new Date().toISOString().substring(0, 10);
+  const estadosActivos = ["pendiente_revision", "aprobada", "en_uso"];
+  const proximasReservaciones = todasReservaciones.filter(
+    (r) => r.espacioId === espacio.id && r.fecha >= hoy && estadosActivos.includes(r.estado)
+  );
 
   const infoItems = [
     { icon: MapPin, label: "Ubicación", value: espacio.ubicacion },
@@ -111,7 +115,7 @@ const EspacioDetalle = () => {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-semibold">Información general</CardTitle>
-              <StatusBadge estado={espacio.estado} />
+              <StatusBadge estado={getEstadoVisualEspacio(espacio, mantenimientos)} />
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -142,44 +146,34 @@ const EspacioDetalle = () => {
         </Card>
 
         {/* Imágenes */}
-        <Card className="shadow-sm">
+        <Card className="shadow-sm self-start">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base font-semibold">Imágenes</CardTitle>
+            <CardTitle className="text-base font-semibold">Imagen principal</CardTitle>
           </CardHeader>
           <CardContent>
             {(espacio.imagenes ?? []).length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                 <ImageIcon className="h-10 w-10 mb-2" />
-                <p className="text-sm">Sin imágenes</p>
+                <p className="text-sm">Sin imagen</p>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2">
-                {(espacio.imagenes ?? []).map((img, i) => (
-                  <AspectRatio key={i} ratio={4 / 3}>
-                    <img
-                      src={img}
-                      alt={`${espacio.nombre} - ${i + 1}`}
-                      className="rounded-md object-cover w-full h-full bg-muted"
-                    />
-                  </AspectRatio>
-                ))}
-              </div>
+              <AspectRatio ratio={4 / 3}>
+                <img
+                  src={getImagenUrl((espacio.imagenes ?? [])[0].url)}
+                  alt={espacio.nombre}
+                  className="rounded-md object-cover w-full h-full bg-muted"
+                />
+              </AspectRatio>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Tabs de reservaciones e incidencias */}
+      {/* Próximas reservaciones */}
       <Tabs defaultValue="proximas" className="space-y-4">
         <TabsList>
           <TabsTrigger value="proximas">
             Próximas reservaciones ({proximasReservaciones.length})
-          </TabsTrigger>
-          <TabsTrigger value="historial">
-            Historial ({historial.length})
-          </TabsTrigger>
-          <TabsTrigger value="incidencias">
-            Incidencias ({incidencias.length})
           </TabsTrigger>
         </TabsList>
 
@@ -190,28 +184,6 @@ const EspacioDetalle = () => {
             <DataTable
               columns={reservacionColumns as any}
               data={proximasReservaciones as any}
-            />
-          )}
-        </TabsContent>
-
-        <TabsContent value="historial">
-          {historial.length === 0 ? (
-            <EmptyState title="Sin historial" description="No hay reservaciones anteriores registradas." />
-          ) : (
-            <DataTable
-              columns={reservacionColumns as any}
-              data={historial as any}
-            />
-          )}
-        </TabsContent>
-
-        <TabsContent value="incidencias">
-          {incidencias.length === 0 ? (
-            <EmptyState title="Sin incidencias" description="No hay incidencias reportadas para este espacio." />
-          ) : (
-            <DataTable
-              columns={incidenciaColumns as any}
-              data={incidencias as any}
             />
           )}
         </TabsContent>

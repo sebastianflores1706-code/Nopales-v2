@@ -258,7 +258,7 @@ export default function PagoDetalle() {
                 variant="outline"
                 size="sm"
                 className="w-full text-xs"
-                onClick={() => navigate(`/reservaciones/${pago.reservacionId}`)}
+                onClick={() => navigate(`/reservaciones/${pago.reservacionId}`, { state: { from: `/pagos/${pago.id}` } })}
               >
                 Ver reservación
               </Button>

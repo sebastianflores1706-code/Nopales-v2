@@ -1,8 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getReservaciones } from "@/lib/api";
-import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, addDays, addMonths, subMonths, isSameMonth, isSameDay, isToday } from "date-fns";
+import { getReservaciones, getMantenimientos, type MantenimientoAPI } from "@/lib/api";
+import { getEstadoVisual } from "@/lib/reservacion-utils";
+import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, addDays, addMonths, subMonths, isSameMonth, isSameDay, isToday, parseISO } from "date-fns";
 import { es } from "date-fns/locale";
 import { ChevronLeft, ChevronRight, CalendarDays, LayoutGrid, Clock, MapPin, Users, FileText, CreditCard, Wrench } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -28,6 +29,13 @@ export default function CalendarioView() {
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [selectedEvento, setSelectedEvento] = useState<EventoCalendario | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+
+  // Actualiza "now" cada minuto para que el estado "En curso" cambie en tiempo real
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const routerNavigate = useNavigate();
 
@@ -36,39 +44,99 @@ export default function CalendarioView() {
     queryFn: getReservaciones,
   });
 
+  const { data: mantenimientos = [] } = useQuery({
+    queryKey: ["mantenimientos"],
+    queryFn: getMantenimientos,
+  });
+
   const eventosCalendario = useMemo<EventoCalendario[]>(() => {
     const estadoMap: Record<string, EstadoCalendario> = {
       pendiente_revision: "pendiente_revision",
       aprobada: "aprobada",
+      en_curso: "en_curso",
       cancelada: "cancelada",
       rechazada: "cancelada",
       en_uso: "en_uso",
       finalizada: "finalizada",
     };
-    const pagoMap: Record<string, "pendiente" | "completado" | "cancelado"> = {
+    const pagoMap: Record<string, "pendiente" | "anticipo" | "completado" | "cancelado"> = {
       pendiente: "pendiente",
+      anticipo: "anticipo",
       pagado: "completado",
       cancelado: "cancelado",
     };
-    return reservaciones.map((r) => ({
-      id: r.id,
-      folio: r.folio,
-      espacio: r.espacioNombre,
-      espacioId: r.espacioId,
-      nombreEvento: r.tipoEvento,
-      organizador: r.solicitanteNombre,
-      tipoEvento: r.tipoEvento,
-      fecha: r.fecha,
-      horaInicio: r.horaInicio,
-      horaFin: r.horaFin,
-      asistentes: r.asistentes,
-      estado: estadoMap[r.estado] ?? "cancelada",
-      pago: pagoMap[r.pagoEstado] ?? "pendiente",
-      montoPago: 0,
-      descripcion: "",
-      documentos: [],
-    }));
-  }, [reservaciones]);
+
+    const eventosReservacion: EventoCalendario[] = reservaciones.map((r) => {
+      // Calcular estado visual: "aprobada" puede derivar a "en_curso" o "finalizada"
+      const estadoVisual = getEstadoVisual(r, now);
+      return {
+        id: r.id,
+        folio: r.folio,
+        espacio: r.espacioNombre,
+        espacioId: r.espacioId,
+        nombreEvento: r.tipoEvento,
+        organizador: r.solicitanteNombre,
+        tipoEvento: r.tipoEvento,
+        fecha: r.fecha,
+        horaInicio: r.horaInicio,
+        horaFin: r.horaFin,
+        asistentes: r.asistentes,
+        estado: estadoMap[estadoVisual] ?? "cancelada",
+        pago: pagoMap[r.pagoEstado] ?? "pendiente",
+        montoPago: r.montoTotal,
+        totalPagado: r.totalPagado,
+        saldoPendiente: r.saldoPendiente,
+        descripcion: "",
+        documentos: [],
+      };
+    });
+
+    // Expandir mantenimientos multi-día: un EventoCalendario por cada día que abarca
+    const eventosMantenimiento: EventoCalendario[] = mantenimientos.flatMap((m: MantenimientoAPI) => {
+      try {
+        const inicio = parseISO(m.fechaInicio);
+        const fin = parseISO(m.fechaFin);
+        const eventos: EventoCalendario[] = [];
+
+        let cursor = new Date(inicio);
+        cursor.setHours(0, 0, 0, 0);
+        const finDate = new Date(fin);
+        finDate.setHours(0, 0, 0, 0);
+
+        while (cursor <= finDate) {
+          const dateStr = format(cursor, "yyyy-MM-dd");
+          const isStartDay = isSameDay(cursor, inicio);
+          const isEndDay = isSameDay(cursor, fin);
+          eventos.push({
+            id: `mnt-${m.id}-${dateStr}`,
+            folio: "",
+            espacio: m.espacioNombre,
+            espacioId: m.espacioId,
+            nombreEvento: `Mantenimiento · ${m.espacioNombre}`,
+            organizador: "Administración",
+            tipoEvento: "Mantenimiento",
+            fecha: dateStr,
+            horaInicio: isStartDay ? format(inicio, "HH:mm") : "00:00",
+            horaFin: isEndDay ? format(fin, "HH:mm") : "23:59",
+            asistentes: 0,
+            estado: "mantenimiento",
+            pago: "completado",
+            montoPago: 0,
+            totalPagado: 0,
+            saldoPendiente: 0,
+            descripcion: m.motivo,
+            documentos: [],
+          });
+          cursor = addDays(cursor, 1);
+        }
+        return eventos;
+      } catch {
+        return [];
+      }
+    });
+
+    return [...eventosReservacion, ...eventosMantenimiento];
+  }, [reservaciones, mantenimientos, now]);
 
   const espaciosFiltroCalendario = useMemo(() => {
     const seen = new Map<string, string>();
@@ -136,6 +204,7 @@ export default function CalendarioView() {
   // Stats
   const pendientes = eventosCalendario.filter((e) => e.estado === "pendiente_revision").length;
   const aprobadas = eventosCalendario.filter((e) => e.estado === "aprobada").length;
+  const enCurso = eventosCalendario.filter((e) => e.estado === "en_curso").length;
 
   return (
     <AppLayout>
@@ -152,6 +221,11 @@ export default function CalendarioView() {
         <div className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium bg-info/10 border-info/20 text-info">
           <span className="h-2 w-2 rounded-full bg-info" /> {aprobadas} aprobadas
         </div>
+        {enCurso > 0 && (
+          <div className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium bg-success/10 border-success/20 text-success">
+            <span className="h-2 w-2 rounded-full bg-success animate-pulse" /> {enCurso} en curso
+          </div>
+        )}
       </div>
 
       {/* Toolbar */}
@@ -293,10 +367,10 @@ export default function CalendarioView() {
         </div>
       </div>
 
-      {/* Legend */}
+      {/* Legend — se omite "en_uso" porque "en_curso" cubre ese significado visualmente */}
       <div className="flex flex-wrap gap-3 mt-3">
         {Object.entries(estadoCalendarioConfig)
-          .filter(([key]) => key !== "mantenimiento")
+          .filter(([key]) => key !== "en_uso")
           .map(([key, cfg]) => (
             <div key={key} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <span className={`h-2.5 w-2.5 rounded-full ${cfg.dotClass}`} />
@@ -326,37 +400,84 @@ export default function CalendarioView() {
                 {/* Info */}
                 <div className="grid gap-3 text-sm">
                   <InfoRow icon={MapPin} label="Espacio" value={selectedEvento.espacio} />
-                  <InfoRow icon={Users} label="Organizador" value={selectedEvento.organizador} />
+                  {selectedEvento.estado !== "mantenimiento" && (
+                    <InfoRow icon={Users} label="Organizador" value={selectedEvento.organizador} />
+                  )}
                   <InfoRow icon={CalendarDays} label="Fecha" value={format(new Date(selectedEvento.fecha + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })} />
                   <InfoRow icon={Clock} label="Horario" value={`${selectedEvento.horaInicio} – ${selectedEvento.horaFin}`} />
-                  <InfoRow icon={Users} label="Asistentes" value={`${selectedEvento.asistentes} personas`} />
-                  <InfoRow icon={LayoutGrid} label="Tipo de evento" value={selectedEvento.tipoEvento} />
+                  {selectedEvento.estado !== "mantenimiento" && (
+                    <>
+                      <InfoRow icon={Users} label="Asistentes" value={`${selectedEvento.asistentes} personas`} />
+                      <InfoRow icon={LayoutGrid} label="Tipo de evento" value={selectedEvento.tipoEvento} />
+                    </>
+                  )}
                 </div>
 
-                <Separator />
+                {selectedEvento.descripcion && (
+                  <>
+                    <Separator />
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground mb-1">
+                        {selectedEvento.estado === "mantenimiento" ? "Motivo" : "Descripción"}
+                      </p>
+                      <p className="text-sm">{selectedEvento.descripcion}</p>
+                    </div>
+                  </>
+                )}
 
-                {/* Descripción */}
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Descripción</p>
-                  <p className="text-sm">{selectedEvento.descripcion}</p>
-                </div>
+                {selectedEvento.estado !== "mantenimiento" && (
+                  <>
+                    <Separator />
 
-                <Separator />
-
-                {/* Pago */}
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-                    <CreditCard className="h-3.5 w-3.5" /> Pago asociado
-                  </p>
-                  <div className="flex items-center justify-between bg-muted/50 rounded-md px-3 py-2">
-                    <span className="text-sm font-medium">
-                      {selectedEvento.montoPago > 0 ? `$${selectedEvento.montoPago.toLocaleString("es-MX")}` : "Sin costo"}
-                    </span>
-                    <Badge variant={selectedEvento.pago === "completado" ? "default" : selectedEvento.pago === "cancelado" ? "destructive" : "secondary"}>
-                      {selectedEvento.pago === "completado" ? "Pagado" : selectedEvento.pago === "cancelado" ? "Cancelado" : "Pendiente"}
-                    </Badge>
-                  </div>
-                </div>
+                    {/* Pago */}
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+                        <CreditCard className="h-3.5 w-3.5" /> Pago asociado
+                      </p>
+                      {selectedEvento.montoPago === 0 ? (
+                        <p className="text-sm text-muted-foreground">Sin costo registrado</p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between bg-muted/50 rounded-md px-3 py-2">
+                            <div className="space-y-0.5">
+                              <p className="text-xs text-muted-foreground">Total reservación</p>
+                              <p className="text-sm font-semibold">${selectedEvento.montoPago.toLocaleString("es-MX")}</p>
+                            </div>
+                            <Badge
+                              variant={
+                                selectedEvento.pago === "completado"
+                                  ? "default"
+                                  : selectedEvento.pago === "cancelado"
+                                  ? "destructive"
+                                  : "secondary"
+                              }
+                            >
+                              {selectedEvento.pago === "completado"
+                                ? "Pagado"
+                                : selectedEvento.pago === "anticipo"
+                                ? "Anticipo"
+                                : selectedEvento.pago === "cancelado"
+                                ? "Cancelado"
+                                : "Pendiente"}
+                            </Badge>
+                          </div>
+                          {selectedEvento.pago !== "completado" && selectedEvento.pago !== "cancelado" && (
+                            <div className="grid grid-cols-2 gap-1.5 text-xs px-1">
+                              <div className="bg-muted/30 rounded px-2 py-1.5">
+                                <p className="text-muted-foreground">Abonado</p>
+                                <p className="font-medium">${selectedEvento.totalPagado.toLocaleString("es-MX")}</p>
+                              </div>
+                              <div className="bg-muted/30 rounded px-2 py-1.5">
+                                <p className="text-muted-foreground">Saldo pendiente</p>
+                                <p className="font-medium text-destructive">${selectedEvento.saldoPendiente.toLocaleString("es-MX")}</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 {/* Documentos */}
                 {selectedEvento.documentos.length > 0 && (

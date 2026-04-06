@@ -9,7 +9,7 @@ export const tipoEspacioEnum = z.enum([
   "centro_cultural",
 ]);
 
-export const estadoEspacioEnum = z.enum(["activo", "inactivo", "en_proceso"]);
+export const estadoEspacioEnum = z.enum(["activo", "inactivo"]);
 
 export const createEspacioSchema = z.object({
   nombre: z.string().min(1, "El nombre es requerido"),

@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Plus, Eye, Pencil, Ban, MapPin, Users, DollarSign } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -13,11 +13,20 @@ import { ConfirmDialog } from "@/components/admin/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { tiposEspacio, estadosEspacio } from "@/data/espaciosMock";
-import { getEspacios, deactivateEspacio, ApiError, type EspacioAPI } from "@/lib/api";
+import { getEspacios, getMantenimientos, deactivateEspacio, ApiError, type EspacioAPI } from "@/lib/api";
+import { getEstadoVisualEspacio } from "@/lib/espacio-utils";
 
 const EspaciosLista = () => {
   const navigate = useNavigate();
-  const [search, setSearch] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const search = searchParams.get("q") ?? "";
+  function setSearch(value: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set("q", value); else next.delete("q");
+      return next;
+    });
+  }
   const [filtroTipo, setFiltroTipo] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("todos");
 
@@ -26,6 +35,12 @@ const EspaciosLista = () => {
   const { data: espacios = [] } = useQuery({
     queryKey: ["espacios"],
     queryFn: getEspacios,
+  });
+
+  const { data: mantenimientos = [] } = useQuery({
+    queryKey: ["mantenimientos"],
+    queryFn: getMantenimientos,
+    refetchInterval: 60_000,
   });
 
   const desactivarMutation = useMutation({
@@ -46,14 +61,15 @@ const EspaciosLista = () => {
         e.nombre.toLowerCase().includes(search.toLowerCase()) ||
         e.ubicacion.toLowerCase().includes(search.toLowerCase());
       const matchTipo = filtroTipo === "todos" || e.tipo.toLowerCase() === filtroTipo;
-      const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
+      const estadoVisual = getEstadoVisualEspacio(e, mantenimientos);
+      const matchEstado = filtroEstado === "todos" || estadoVisual === filtroEstado;
       return matchSearch && matchTipo && matchEstado;
     });
-  }, [espacios, search, filtroTipo, filtroEstado]);
+  }, [espacios, mantenimientos, search, filtroTipo, filtroEstado]);
 
-  const totalActivos = espacios.filter((e) => e.estado === "activo").length;
-  const totalInactivos = espacios.filter((e) => e.estado === "inactivo").length;
-  const totalMantenimiento = espacios.filter((e) => e.estado === "en_proceso").length;
+  const totalActivos = espacios.filter((e) => getEstadoVisualEspacio(e, mantenimientos) === "activo").length;
+  const totalInactivos = espacios.filter((e) => getEstadoVisualEspacio(e, mantenimientos) === "inactivo").length;
+  const totalMantenimiento = espacios.filter((e) => getEstadoVisualEspacio(e, mantenimientos) === "en_mantenimiento").length;
 
   const columns: Column<EspacioAPI>[] = [
     {
@@ -82,7 +98,7 @@ const EspaciosLista = () => {
     {
       key: "estado",
       header: "Estado",
-      render: (item) => <StatusBadge estado={item.estado} />,
+      render: (item) => <StatusBadge estado={getEstadoVisualEspacio(item, mantenimientos)} />,
     },
     {
       key: "proximaReservacion",

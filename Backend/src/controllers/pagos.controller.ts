@@ -8,6 +8,12 @@ export const pagosController = {
     res.json(pagos);
   },
 
+  async getMios(req: Request, res: Response) {
+    const { id: usuarioId } = req.usuario!;
+    const pagos = await pagosService.getMios(usuarioId);
+    res.json(pagos);
+  },
+
   async getById(req: Request, res: Response) {
     try {
       const pago = await pagosService.getById(req.params.id);

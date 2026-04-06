@@ -18,7 +18,8 @@ const navItems = [
   { title: "Contratos", url: "/contratos", icon: FileText },
   { title: "Mantenimiento", url: "/mantenimiento", icon: Wrench },
   { title: "Usuarios", url: "/usuarios", icon: Users },
-  { title: "Reportes", url: "/reportes", icon: BarChart3 },
+  // { title: "Reportes", url: "/reportes", icon: BarChart3 }, // pendiente de implementar
+
 ];
 
 export function AppSidebar() {

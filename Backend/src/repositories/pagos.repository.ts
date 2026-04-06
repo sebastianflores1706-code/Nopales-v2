@@ -59,6 +59,18 @@ export const pagosRepository = {
     return (rows as Record<string, unknown>[]).map(toPago);
   },
 
+  async findByUsuarioId(usuarioId: string): Promise<Pago[]> {
+    const [rows] = await pool.query(
+      `SELECT p.*
+       FROM pagos p
+       INNER JOIN reservaciones r ON r.id = p.reservacion_id
+       WHERE r.usuario_id = ?
+       ORDER BY p.creado_en ASC`,
+      [usuarioId]
+    );
+    return (rows as Record<string, unknown>[]).map(toPago);
+  },
+
   async create(data: CreatePagoDto): Promise<Pago> {
     const id = randomUUID();
     const fechaPago = data.fechaPago ?? (data.estado === "pagado" ? hoy() : null);

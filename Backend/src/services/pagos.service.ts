@@ -8,9 +8,18 @@ async function enrich(pago: Pago) {
     pagosRepository.findByReservacionId(pago.reservacionId),
   ]);
 
-  const montoTotal   = reservacion?.montoTotal ?? 0;
-  const totalPagado  = todosPagos.reduce((sum, p) => sum + p.monto, 0);
+  const montoTotal = reservacion?.montoTotal ?? 0;
+  // Solo contar pagos no cancelados para el cálculo financiero
+  const pagosValidos = todosPagos.filter((p) => p.estado !== "cancelado");
+  const totalPagado = pagosValidos.reduce((sum, p) => sum + p.monto, 0);
   const saldoPendiente = Math.max(0, montoTotal - totalPagado);
+  // Estado financiero de la reservación, independiente del estado del pago individual
+  const estadoFinanciero =
+    totalPagado === 0
+      ? "pendiente"
+      : saldoPendiente > 0
+      ? "anticipo"
+      : "pagado";
 
   return {
     ...pago,
@@ -25,12 +34,18 @@ async function enrich(pago: Pago) {
     montoTotal,
     totalPagado,
     saldoPendiente,
+    estadoFinanciero,
   };
 }
 
 export const pagosService = {
   async getAll() {
     const pagos = await pagosRepository.findAll();
+    return Promise.all(pagos.map(enrich));
+  },
+
+  async getMios(usuarioId: string) {
+    const pagos = await pagosRepository.findByUsuarioId(usuarioId);
     return Promise.all(pagos.map(enrich));
   },
 
@@ -59,7 +74,9 @@ export const pagosService = {
     // Esto preserva el historial sin dejar inconsistencias de estado.
     if (reservacion.montoTotal > 0) {
       const todosPagos = await pagosRepository.findByReservacionId(data.reservacionId);
-      const totalPagado = todosPagos.reduce((sum, p) => sum + p.monto, 0);
+      const totalPagado = todosPagos
+        .filter((p) => p.estado !== "cancelado")
+        .reduce((sum, p) => sum + p.monto, 0);
       if (totalPagado >= reservacion.montoTotal) {
         await pagosRepository.markAllPendienteAsPagado(data.reservacionId);
       }

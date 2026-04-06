@@ -1,22 +1,40 @@
 import { reservacionesRepository, type Reservacion } from "../repositories/reservaciones.repository";
 import { espaciosRepository } from "../repositories/espacios.repository";
 import { pagosRepository } from "../repositories/pagos.repository";
+import { mantenimientosRepository } from "../repositories/mantenimientos.repository";
 import type { CreateReservacionDto, CambiarEstadoDto } from "../validators/reservaciones.schema";
 
 async function enrichReservacion(reservacion: Reservacion) {
   const pagos = await pagosRepository.findByReservacionId(reservacion.id);
-  const pagoEstado = pagos.length > 0 ? pagos[pagos.length - 1].estado : "pendiente";
-  const totalPagado = pagos.reduce((sum, p) => sum + p.monto, 0);
+  // Solo contar pagos no cancelados para el cálculo financiero
+  const pagosValidos = pagos.filter((p) => p.estado !== "cancelado");
+  const totalPagado = pagosValidos.reduce((sum, p) => sum + p.monto, 0);
   const saldoPendiente = Math.max(0, reservacion.montoTotal - totalPagado);
-  return { ...reservacion, pagoEstado, totalPagado, saldoPendiente };
+  // Estado financiero basado en montos, no en el estado individual de cada pago
+  const pagoEstado =
+    totalPagado === 0
+      ? "pendiente"
+      : saldoPendiente > 0
+      ? "anticipo"
+      : "pagado";
+
+  // Para reservaciones canceladas sin datos de reembolso en BD (canceladas antes de la migración),
+  // derivar el estado dinámicamente desde los pagos ya calculados arriba.
+  let reembolsoEstado = reservacion.reembolsoEstado;
+  let reembolsoMonto = reservacion.reembolsoMonto;
+  if (reservacion.estado === "cancelada" && !reembolsoEstado) {
+    reembolsoEstado = totalPagado > 0 ? "pendiente" : "no_aplica";
+    reembolsoMonto = totalPagado;
+  }
+
+  return { ...reservacion, pagoEstado, totalPagado, saldoPendiente, reembolsoEstado, reembolsoMonto };
 }
 
 const ESTADOS_CON_OCUPACION = new Set(["pendiente_revision", "aprobada", "en_uso"]);
 
 const TRANSICIONES_VALIDAS: Record<string, string[]> = {
   pendiente_revision: ["aprobada", "rechazada", "cancelada"],
-  aprobada: ["en_uso", "cancelada"],
-  en_uso: ["finalizada"],
+  aprobada: ["cancelada"],
   rechazada: [],
   cancelada: [],
   finalizada: [],
@@ -32,18 +50,22 @@ function hayTraslape(
 }
 
 export const reservacionesService = {
-  async getAll() {
-    const reservaciones = await reservacionesRepository.findAll();
+  async getAll(filter?: { usuarioId?: string }) {
+    await reservacionesRepository.finalizarVencidas();
+    const reservaciones = filter?.usuarioId
+      ? await reservacionesRepository.findByUsuarioId(filter.usuarioId)
+      : await reservacionesRepository.findAll();
     return Promise.all(reservaciones.map(enrichReservacion));
   },
 
   async getById(id: string) {
+    await reservacionesRepository.finalizarVencidas();
     const reservacion = await reservacionesRepository.findById(id);
     if (!reservacion) throw new Error("Reservación no encontrada");
     return enrichReservacion(reservacion);
   },
 
-  async create(data: CreateReservacionDto) {
+  async create(data: CreateReservacionDto, usuarioId: string | null = null) {
     // Regla 2: el espacio debe existir
     const espacio = await espaciosRepository.findById(data.espacioId);
     if (!espacio) throw new Error("El espacio especificado no existe");
@@ -78,7 +100,37 @@ export const reservacionesService = {
       );
     }
 
-    return reservacionesRepository.create(data, espacio.nombre);
+    // Regla 6: validar que no haya mantenimiento programado en ese horario
+    const mantenimientoEnRango = await mantenimientosRepository.findTraslapeMantenimiento(
+      data.espacioId,
+      `${data.fecha}T${data.horaInicio}:00`,
+      `${data.fecha}T${data.horaFin}:00`
+    );
+    if (mantenimientoEnRango.length > 0) {
+      throw new Error(
+        "No se puede crear la reservación: el espacio tiene mantenimiento programado en ese horario"
+      );
+    }
+
+    return reservacionesRepository.create(data, espacio.nombre, usuarioId);
+  },
+
+  async marcarReembolsoProcesado(id: string) {
+    const reservacion = await reservacionesRepository.findById(id);
+    if (!reservacion) throw new Error("Reservación no encontrada");
+    if (reservacion.estado !== "cancelada") throw new Error("Solo se puede procesar el reembolso de reservaciones canceladas");
+
+    // Calcular monto real desde pagos (cubre tanto registros nuevos como históricos con reembolso_monto = 0)
+    const pagos = await pagosRepository.findByReservacionId(id);
+    const pagosValidos = pagos.filter((p) => p.estado !== "cancelado");
+    const totalPagado = pagosValidos.reduce((s, p) => s + p.monto, 0);
+    if (totalPagado === 0) throw new Error("Esta reservación no tiene pagos que reembolsar");
+
+    // Permitir marcar como procesado si está pendiente o si es null (registro histórico)
+    const estadoActual = reservacion.reembolsoEstado;
+    if (estadoActual && estadoActual !== "pendiente") throw new Error("El reembolso no está en estado pendiente");
+
+    return reservacionesRepository.updateCancelacion(id, "procesado", totalPagado);
   },
 
   async cambiarEstado(id: string, data: CambiarEstadoDto) {
@@ -101,6 +153,15 @@ export const reservacionesService = {
           "No se puede cancelar una reservación aprobada cuyo evento ya inició o ya pasó"
         );
       }
+    }
+
+    // Al cancelar: calcular si hay monto abonado para determinar reembolso
+    if (data.estado === "cancelada") {
+      const pagos = await pagosRepository.findByReservacionId(id);
+      const pagosValidos = pagos.filter((p) => p.estado !== "cancelado");
+      const totalPagado = pagosValidos.reduce((s, p) => s + p.monto, 0);
+      const reembolsoEstado = totalPagado > 0 ? "pendiente" : "no_aplica";
+      return reservacionesRepository.updateCancelacion(id, reembolsoEstado, totalPagado);
     }
 
     return reservacionesRepository.updateEstado(id, data.estado);

@@ -1,4 +1,5 @@
 import { ClipboardList, CreditCard, AlertTriangle, MapPin, CalendarCheck, DollarSign } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { StatCard } from "@/components/admin/StatCard";
 import { PageHeader } from "@/components/admin/PageHeader";
@@ -6,20 +7,29 @@ import { StatusBadge } from "@/components/admin/StatusBadge";
 import { DataTable, Column } from "@/components/admin/DataTable";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import {
-  dashboardMetrics, espaciosMasUtilizados, actividadReciente, solicitudesPendientes,
-} from "@/data/mockData";
+import { getDashboardAdmin, type SolicitudPendiente } from "@/lib/api";
 
-const solicitudColumns: Column<typeof solicitudesPendientes[0]>[] = [
+const solicitudColumns: Column<SolicitudPendiente>[] = [
   { key: "id", header: "ID" },
   { key: "solicitante", header: "Solicitante" },
   { key: "espacio", header: "Espacio" },
   { key: "tipo", header: "Tipo" },
   { key: "fecha", header: "Fecha" },
-  { key: "estado", header: "Estado", render: (item) => <StatusBadge estado={item.estado} /> },
+  { key: "estado", header: "Estado", render: (item) => <StatusBadge estado={item.estado as any} /> },
 ];
 
 const Index = () => {
+  const { data, isLoading } = useQuery({
+    queryKey: ["dashboard-admin"],
+    queryFn: getDashboardAdmin,
+    staleTime: 30_000,
+  });
+
+  const metricas = data?.metricas;
+  const espaciosMasUtilizados = data?.espaciosMasUtilizados ?? [];
+  const actividadReciente = data?.actividadReciente ?? [];
+  const solicitudesPendientes = data?.solicitudesPendientes ?? [];
+
   return (
     <AppLayout>
       <PageHeader
@@ -31,38 +41,38 @@ const Index = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
         <StatCard
           title="Solicitudes pendientes"
-          value={dashboardMetrics.solicitudesPendientes}
+          value={isLoading ? "—" : (metricas?.solicitudesPendientes ?? 0)}
           icon={ClipboardList}
           variant="warning"
           trend={{ value: 8, positive: false }}
         />
         <StatCard
-          title="Pagos pendientes"
-          value={dashboardMetrics.pagosPendientes}
+          title="Res. con saldo pendiente"
+          value={isLoading ? "—" : (metricas?.reservacionesSaldoPendiente ?? 0)}
           icon={CreditCard}
           variant="destructive"
         />
         <StatCard
-          title="Incidencias abiertas"
-          value={dashboardMetrics.incidenciasAbiertas}
+          title="Mantenimientos activos"
+          value={isLoading ? "—" : (metricas?.mantenimientosActivos ?? 0)}
           icon={AlertTriangle}
           variant="destructive"
         />
         <StatCard
           title="Espacios activos"
-          value={dashboardMetrics.espaciosActivos}
+          value={isLoading ? "—" : (metricas?.espaciosActivos ?? 0)}
           icon={MapPin}
           variant="primary"
         />
         <StatCard
           title="Reservaciones hoy"
-          value={dashboardMetrics.reservacionesHoy}
+          value={isLoading ? "—" : (metricas?.reservacionesHoy ?? 0)}
           icon={CalendarCheck}
           variant="success"
         />
         <StatCard
           title="Ingresos del mes"
-          value={`$${dashboardMetrics.ingresosMes.toLocaleString()}`}
+          value={isLoading ? "—" : `$${(metricas?.ingresosMes ?? 0).toLocaleString()}`}
           icon={DollarSign}
           variant="primary"
           trend={{ value: 12, positive: true }}
@@ -85,6 +95,9 @@ const Index = () => {
                 <Progress value={espacio.ocupacion} className="h-2" />
               </div>
             ))}
+            {!isLoading && espaciosMasUtilizados.length === 0 && (
+              <p className="text-sm text-muted-foreground">Sin datos</p>
+            )}
           </CardContent>
         </Card>
 
@@ -103,9 +116,12 @@ const Index = () => {
                       {actividad.usuario} · {actividad.fecha}
                     </p>
                   </div>
-                  <StatusBadge estado={actividad.estado} />
+                  <StatusBadge estado={actividad.estado as any} />
                 </div>
               ))}
+              {!isLoading && actividadReciente.length === 0 && (
+                <p className="text-sm text-muted-foreground">Sin actividad reciente</p>
+              )}
             </div>
           </CardContent>
         </Card>

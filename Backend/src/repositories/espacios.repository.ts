@@ -2,6 +2,11 @@ import { randomUUID } from "crypto";
 import pool from "../lib/db";
 import type { CreateEspacioDto, UpdateEspacioDto } from "../validators/espacios.schema";
 
+export interface ImagenEspacioRef {
+  id: string;
+  url: string;
+}
+
 export interface Espacio {
   id: string;
   nombre: string;
@@ -13,6 +18,7 @@ export interface Espacio {
   descripcion?: string;
   reglas?: string;
   horarioDisponible?: string;
+  imagenes?: ImagenEspacioRef[];
 }
 
 // Mapea una fila de MySQL al tipo Espacio del dominio.
@@ -45,7 +51,23 @@ export const espaciosRepository = {
     );
     const list = rows as Record<string, unknown>[];
     if (list.length === 0) return undefined;
-    return toEspacio(list[0]);
+    const espacio = toEspacio(list[0]);
+
+    try {
+      const [imgRows] = await pool.query(
+        "SELECT id, url FROM imagenes_espacio WHERE espacio_id = ? ORDER BY created_at ASC",
+        [id]
+      );
+      espacio.imagenes = (imgRows as Record<string, unknown>[]).map((r) => ({
+        id: r.id as string,
+        url: r.url as string,
+      }));
+    } catch {
+      // La tabla imagenes_espacio aún no existe (migración pendiente)
+      espacio.imagenes = [];
+    }
+
+    return espacio;
   },
 
   async create(data: CreateEspacioDto): Promise<Espacio> {

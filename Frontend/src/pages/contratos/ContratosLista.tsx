@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileText, Eye, MapPin, CalendarDays, User } from "lucide-react";
+import { FileText, Eye, MapPin, CalendarDays, User, Download, Printer, MoreHorizontal, ExternalLink } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { EmptyState } from "@/components/admin/EmptyState";
@@ -13,10 +13,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import {
   getAllDocumentos,
   generarContrato,
+  generarPdfContrato,
+  getPdfUrl,
   getReservaciones,
   ApiError,
   type DocumentoAPI,
@@ -58,11 +67,30 @@ export default function ContratosLista() {
     },
   });
 
+  const pdfMutation = useMutation({
+    mutationFn: (documentoId: string) => generarPdfContrato(documentoId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documentos"] });
+      toast.success("PDF generado correctamente");
+    },
+    onError: (err) => {
+      const mensaje =
+        err instanceof ApiError
+          ? (err.data as { error?: string })?.error ?? `Error ${err.status}`
+          : "No se pudo generar el PDF";
+      toast.error(mensaje);
+    },
+  });
+
   // Reservaciones aprobadas sin contrato aún
   const contratoIds = new Set(contratos.map((c) => c.reservacionId));
-  const reservacionesSinContrato = reservaciones.filter(
+  const apróbadasSinContrato = reservaciones.filter(
     (r) => r.estado === "aprobada" && !contratoIds.has(r.id)
   );
+  // Listas: aprobadas con pago completo (saldo = 0) → se puede generar contrato
+  const reservacionesSinContrato = apróbadasSinContrato.filter((r) => r.saldoPendiente === 0);
+  // Con saldo pendiente: pago parcial o sin pago → no se puede generar contrato todavía
+  const reservacionesSinPago = apróbadasSinContrato.filter((r) => r.saldoPendiente > 0);
 
   if (isLoading) {
     return (
@@ -83,11 +111,14 @@ export default function ContratosLista() {
         </div>
       </div>
 
-      {/* Reservaciones pendientes de contrato */}
+      {/* Reservaciones aprobadas con pago: listas para generar contrato */}
       {reservacionesSinContrato.length > 0 && (
-        <Card className="mb-6">
+        <Card className="mb-4">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Reservaciones sin contrato</CardTitle>
+            <CardTitle className="text-base flex items-center gap-2">
+              <FileText className="h-4 w-4 text-primary" />
+              Listas para generar contrato
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
@@ -96,22 +127,55 @@ export default function ContratosLista() {
                   key={r.id}
                   className="flex items-center justify-between py-2 px-3 rounded-md bg-muted/50 text-sm"
                 >
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-4 flex-wrap">
                     <span className="font-mono font-medium">{r.folio}</span>
                     <span className="text-muted-foreground">{r.solicitanteNombre}</span>
                     <span className="text-muted-foreground">{r.espacioNombre}</span>
                     <span className="text-muted-foreground">{formatDate(r.fecha)}</span>
+                    <StatusBadge estado={r.pagoEstado} />
                   </div>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="text-xs gap-1.5"
+                    className="text-xs gap-1.5 shrink-0"
                     disabled={generarMutation.isPending}
                     onClick={() => generarMutation.mutate(r.id)}
                   >
                     <FileText className="h-3.5 w-3.5" />
                     Generar contrato
                   </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Reservaciones aprobadas sin pago: no se puede generar contrato aún */}
+      {reservacionesSinPago.length > 0 && (
+        <Card className="mb-6 border-warning/30">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base text-warning flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              Saldo pendiente (requieren pago completo para generar contrato)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {reservacionesSinPago.map((r) => (
+                <div
+                  key={r.id}
+                  className="flex items-center justify-between py-2 px-3 rounded-md bg-warning/5 text-sm"
+                >
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <span className="font-mono font-medium">{r.folio}</span>
+                    <span className="text-muted-foreground">{r.solicitanteNombre}</span>
+                    <span className="text-muted-foreground">{r.espacioNombre}</span>
+                    <span className="text-muted-foreground">{formatDate(r.fecha)}</span>
+                  </div>
+                  <span className="text-xs text-warning font-medium shrink-0">
+                    Sin pago registrado
+                  </span>
                 </div>
               ))}
             </div>
@@ -160,24 +224,66 @@ export default function ContratosLista() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs gap-1.5"
-                      onClick={() => setVistaContrato(doc)}
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                      Ver
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-xs"
-                      onClick={() => navigate(`/reservaciones/${doc.reservacionId}`)}
-                    >
-                      Ver reservación
-                    </Button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {doc.pdfPath ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs gap-1.5"
+                        onClick={() => window.open(getPdfUrl(doc.id), "_blank")}
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        Ver PDF
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="text-xs gap-1.5"
+                        disabled={pdfMutation.isPending}
+                        onClick={() => pdfMutation.mutate(doc.id)}
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        {pdfMutation.isPending ? "Generando..." : "Generar PDF"}
+                      </Button>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setVistaContrato(doc)}>
+                          <Eye className="h-3.5 w-3.5 mr-2" />
+                          Ver HTML
+                        </DropdownMenuItem>
+                        {doc.pdfPath && (
+                          <>
+                            <DropdownMenuItem asChild>
+                              <a href={getPdfUrl(doc.id, true)} download className="flex items-center">
+                                <Download className="h-3.5 w-3.5 mr-2" />
+                                Descargar PDF
+                              </a>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                const win = window.open(getPdfUrl(doc.id), "_blank");
+                                win?.addEventListener("load", () => win.print());
+                              }}
+                            >
+                              <Printer className="h-3.5 w-3.5 mr-2" />
+                              Imprimir
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => navigate(`/reservaciones/${doc.reservacionId}`, { state: { from: "/contratos" } })}>
+                          <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                          Ver reservación
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               </CardContent>

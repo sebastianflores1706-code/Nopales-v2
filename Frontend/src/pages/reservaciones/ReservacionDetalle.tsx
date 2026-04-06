@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   ArrowLeft, CheckCircle, XCircle, Ban, FileText, DollarSign,
   MapPin, Users, Calendar, Clock, User,
@@ -11,18 +11,20 @@ import { StatusBadge } from "@/components/admin/StatusBadge";
 import { EmptyState } from "@/components/admin/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { getReservacionById, updateReservacionEstado, createPago, generarContrato, getDocumentosByReservacion, ApiError, type DocumentoAPI } from "@/lib/api";
+import { getReservacionById, updateReservacionEstado, marcarReembolsoProcesado, createPago, generarContrato, getDocumentosByReservacion, ApiError, type DocumentoAPI } from "@/lib/api";
+import { getEstadoVisual } from "@/lib/reservacion-utils";
 
 const ReservacionDetalle = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTo = (location.state as { from?: string } | null)?.from ?? "/reservaciones";
   const queryClient = useQueryClient();
 
   const [dialogPagoOpen, setDialogPagoOpen] = useState(false);
@@ -48,10 +50,9 @@ const ReservacionDetalle = () => {
       queryClient.invalidateQueries({ queryKey: ["reservacion", id] });
       queryClient.invalidateQueries({ queryKey: ["reservaciones"] });
       const labels: Record<string, string> = {
-        aprobada:  "aprobada",
-        rechazada: "rechazada",
-        cancelada: "cancelada",
-        en_uso:    "marcada como en uso",
+        aprobada:   "aprobada",
+        rechazada:  "rechazada",
+        cancelada:  "cancelada",
         finalizada: "finalizada",
       };
       toast.success(`Solicitud ${labels[estado] ?? estado} correctamente`);
@@ -60,6 +61,20 @@ const ReservacionDetalle = () => {
       const mensaje = err instanceof ApiError
         ? (err.data as any)?.error ?? `Error ${err.status}`
         : "No se pudo actualizar el estado";
+      toast.error(mensaje);
+    },
+  });
+
+  const reembolsoMutation = useMutation({
+    mutationFn: () => marcarReembolsoProcesado(id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["reservacion", id] });
+      toast.success("Reembolso marcado como procesado");
+    },
+    onError: (err) => {
+      const mensaje = err instanceof ApiError
+        ? (err.data as any)?.error ?? `Error ${err.status}`
+        : "No se pudo actualizar el reembolso";
       toast.error(mensaje);
     },
   });
@@ -92,6 +107,8 @@ const ReservacionDetalle = () => {
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pagos"] });
+      queryClient.invalidateQueries({ queryKey: ["reservacion", id] });
+      queryClient.invalidateQueries({ queryKey: ["reservaciones"] });
       toast.success("Pago registrado correctamente");
       setDialogPagoOpen(false);
       setPagoMonto("");
@@ -104,6 +121,14 @@ const ReservacionDetalle = () => {
       toast.error(mensaje);
     },
   });
+
+  function abrirDialogPago() {
+    // Pre-llenar con el saldo pendiente real
+    if (reservacion && reservacion.saldoPendiente > 0) {
+      setPagoMonto(String(reservacion.saldoPendiente));
+    }
+    setDialogPagoOpen(true);
+  }
 
   if (isLoading) {
     return (
@@ -139,7 +164,7 @@ const ReservacionDetalle = () => {
         description={reservacion.tipoEvento}
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" className="gap-2" onClick={() => navigate("/reservaciones")}>
+            <Button variant="outline" size="sm" className="gap-2" onClick={() => navigate(backTo)}>
               <ArrowLeft className="h-4 w-4" />
               Volver
             </Button>
@@ -153,7 +178,7 @@ const ReservacionDetalle = () => {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-semibold">Información del evento</CardTitle>
-              <StatusBadge estado={reservacion.estado} />
+              <StatusBadge estado={getEstadoVisual(reservacion)} />
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -172,7 +197,9 @@ const ReservacionDetalle = () => {
             </div>
             <div className="pt-2 border-t border-border">
               <p className="text-xs text-muted-foreground mb-1">Descripción del evento</p>
-              <p className="text-sm leading-relaxed text-muted-foreground">Sin descripción registrada.</p>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                {reservacion.descripcionEvento ?? "Sin descripción registrada."}
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -188,17 +215,84 @@ const ReservacionDetalle = () => {
                 <span className="text-sm text-muted-foreground">Estado</span>
                 <StatusBadge estado={reservacion.pagoEstado} />
               </div>
-              {reservacion.pagoEstado === "pendiente" && reservacion.estado !== "rechazada" && (
+              {reservacion.montoTotal > 0 && (
+                <div className="bg-muted/50 rounded-lg p-3 space-y-1.5 text-xs">
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Total reservación</span>
+                    <span className="font-medium text-foreground">
+                      ${reservacion.montoTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Total abonado</span>
+                    <span className="font-medium text-green-600">
+                      ${reservacion.totalPagado.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  {reservacion.saldoPendiente > 0 && (
+                    <div className="flex justify-between border-t pt-1.5 mt-1 text-muted-foreground">
+                      <span>Saldo pendiente</span>
+                      <span className="font-semibold text-destructive">
+                        ${reservacion.saldoPendiente.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+              {reservacion.pagoEstado !== "pagado" &&
+                reservacion.estado !== "rechazada" &&
+                reservacion.estado !== "cancelada" && (
                 <>
                   <Separator />
-                  <Button size="sm" className="w-full gap-2" onClick={() => setDialogPagoOpen(true)}>
+                  <Button size="sm" className="w-full gap-2" onClick={abrirDialogPago}>
                     <DollarSign className="h-4 w-4" />
-                    Registrar pago
+                    {reservacion.pagoEstado === "anticipo" ? "Registrar abono" : "Registrar pago"}
                   </Button>
                 </>
               )}
             </CardContent>
           </Card>
+
+          {reservacion.estado === "cancelada" && reservacion.reembolsoEstado && (
+            <Card className="shadow-sm">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base font-semibold">Reembolso</CardTitle>
+                  <StatusBadge estado={
+                    reservacion.reembolsoEstado === "pendiente" ? "reembolso_pendiente"
+                    : reservacion.reembolsoEstado === "procesado" ? "reembolso_procesado"
+                    : "no_aplica"
+                  } />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {reservacion.reembolsoEstado === "no_aplica" ? (
+                  <p className="text-sm text-muted-foreground">No se realizaron pagos. Sin reembolso aplicable.</p>
+                ) : (
+                  <>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Monto a reembolsar</span>
+                      <span className="font-semibold">${reservacion.reembolsoMonto.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    {reservacion.reembolsoEstado === "pendiente" && (
+                      <>
+                        <Separator />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full gap-2"
+                          disabled={reembolsoMutation.isPending}
+                          onClick={() => reembolsoMutation.mutate()}
+                        >
+                          Marcar reembolso como procesado
+                        </Button>
+                      </>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="shadow-sm">
             <CardHeader className="pb-3">
@@ -245,56 +339,51 @@ const ReservacionDetalle = () => {
                 size="sm"
                 variant="outline"
                 className="w-full gap-2"
-                disabled={generarContratoMutation.isPending}
+                disabled={generarContratoMutation.isPending || reservacion.saldoPendiente > 0}
                 onClick={() => generarContratoMutation.mutate()}
               >
                 <FileText className="h-4 w-4" />
                 Generar contrato
               </Button>
+              {reservacion.saldoPendiente > 0 && (
+                <p className="text-xs text-muted-foreground text-center">
+                  Requiere pago completo para generar contrato
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
 
-      {/* Tabs */}
-      <Tabs defaultValue="documentos" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="documentos">Documentos</TabsTrigger>
-          <TabsTrigger value="historial">Historial de cambios</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="documentos">
-          {isLoadingDocs ? (
-            <EmptyState title="Cargando documentos..." description="Por favor espera." />
-          ) : documentos.length === 0 ? (
-            <EmptyState title="Sin documentos" description="No hay documentos asociados a esta reservación." />
-          ) : (
-            <Card className="shadow-sm">
-              <CardContent className="pt-4 space-y-2">
-                {documentos.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/30 cursor-pointer hover:bg-muted/60 transition-colors"
-                    onClick={() => setDocViewer(doc)}
-                  >
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-                      <FileText className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">{doc.nombreArchivo}</p>
-                      <p className="text-xs text-muted-foreground">{doc.tipo}</p>
-                    </div>
+      {/* Documentos */}
+      <div className="space-y-3">
+        <h2 className="text-base font-semibold">Documentos</h2>
+        {isLoadingDocs ? (
+          <EmptyState title="Cargando documentos..." description="Por favor espera." />
+        ) : documentos.length === 0 ? (
+          <EmptyState title="Sin documentos" description="No hay documentos asociados a esta reservación." />
+        ) : (
+          <Card className="shadow-sm">
+            <CardContent className="pt-4 space-y-2">
+              {documentos.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/30 cursor-pointer hover:bg-muted/60 transition-colors"
+                  onClick={() => setDocViewer(doc)}
+                >
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <FileText className="h-4 w-4 text-muted-foreground" />
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
-
-        <TabsContent value="historial">
-          <EmptyState title="Sin historial" description="No hay cambios registrados para esta reservación." />
-        </TabsContent>
-      </Tabs>
+                  <div>
+                    <p className="text-sm font-medium">{doc.nombreArchivo}</p>
+                    <p className="text-xs text-muted-foreground">{doc.tipo}</p>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+      </div>
 
       {/* Dialog visor de documento */}
       <Dialog open={!!docViewer} onOpenChange={(open) => { if (!open) setDocViewer(null); }}>
@@ -311,22 +400,55 @@ const ReservacionDetalle = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog registrar pago */}
+      {/* Dialog registrar pago / abono */}
       <Dialog open={dialogPagoOpen} onOpenChange={setDialogPagoOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Registrar pago</DialogTitle>
+            <DialogTitle>
+              {reservacion.pagoEstado === "anticipo" ? "Registrar abono" : "Registrar pago"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {/* Resumen financiero */}
+            {reservacion.montoTotal > 0 && (
+              <div className="bg-muted/50 rounded-lg p-3 space-y-1.5 text-xs">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Total reservación</span>
+                  <span className="font-medium text-foreground">
+                    ${reservacion.montoTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Ya abonado</span>
+                  <span className="font-medium text-green-600">
+                    ${reservacion.totalPagado.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div className="flex justify-between border-t pt-1.5 mt-1 text-muted-foreground">
+                  <span>Saldo pendiente</span>
+                  <span className="font-semibold text-destructive">
+                    ${reservacion.saldoPendiente.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="pagoMonto">Monto *</Label>
               <Input
                 id="pagoMonto"
                 type="number"
+                min="0.01"
+                step="0.01"
+                max={reservacion.saldoPendiente > 0 ? reservacion.saldoPendiente : undefined}
                 placeholder="Ej. 5000"
                 value={pagoMonto}
                 onChange={(e) => setPagoMonto(e.target.value)}
               />
+              {reservacion.saldoPendiente > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Máximo: ${reservacion.saldoPendiente.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="pagoMetodo">Método de pago *</Label>
@@ -347,10 +469,15 @@ const ReservacionDetalle = () => {
               Cancelar
             </Button>
             <Button
-              disabled={!pagoMonto || Number(pagoMonto) <= 0 || registrarPagoMutation.isPending}
+              disabled={
+                !pagoMonto ||
+                Number(pagoMonto) <= 0 ||
+                (reservacion.saldoPendiente > 0 && Number(pagoMonto) > reservacion.saldoPendiente) ||
+                registrarPagoMutation.isPending
+              }
               onClick={() => registrarPagoMutation.mutate()}
             >
-              Confirmar pago
+              {registrarPagoMutation.isPending ? "Registrando..." : "Confirmar pago"}
             </Button>
           </DialogFooter>
         </DialogContent>

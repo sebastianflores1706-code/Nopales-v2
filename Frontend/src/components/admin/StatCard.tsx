@@ -8,6 +8,8 @@ interface StatCardProps {
   description?: string;
   trend?: { value: number; positive: boolean };
   variant?: "default" | "primary" | "warning" | "destructive" | "success";
+  iconBg?: string;
+  iconColor?: string;
 }
 
 const variantStyles = {
@@ -18,7 +20,7 @@ const variantStyles = {
   success: "bg-success/10 text-success",
 };
 
-export function StatCard({ title, value, icon: Icon, description, trend, variant = "default" }: StatCardProps) {
+export function StatCard({ title, value, icon: Icon, description, trend, variant = "default", iconBg, iconColor }: StatCardProps) {
   return (
     <Card className="shadow-sm">
       <CardContent className="p-5">
@@ -35,8 +37,8 @@ export function StatCard({ title, value, icon: Icon, description, trend, variant
               </p>
             )}
           </div>
-          <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${variantStyles[variant]}`}>
-            <Icon className="h-5 w-5" />
+          <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${iconBg ? iconBg : variantStyles[variant]}`}>
+            <Icon className={`h-5 w-5 ${iconColor ?? ""}`} />
           </div>
         </div>
       </CardContent>
