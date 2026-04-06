@@ -10,7 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { getEspacioById, getImagenUrl, ApiError } from "@/lib/api";
+import { getEspacioById, getImagenUrl, getMantenimientos, ApiError } from "@/lib/api";
+import { getEstadoVisualEspacio } from "@/lib/espacio-utils";
 
 export default function UserEspacioDetalle() {
   const { id } = useParams();
@@ -21,6 +22,12 @@ export default function UserEspacioDetalle() {
     queryKey: ["espacio", id],
     queryFn: () => getEspacioById(id!),
     enabled: !!id,
+  });
+
+  const { data: mantenimientos = [] } = useQuery({
+    queryKey: ["mantenimientos"],
+    queryFn: getMantenimientos,
+    refetchInterval: 60_000,
   });
 
   if (isLoading) {
@@ -69,7 +76,8 @@ export default function UserEspacioDetalle() {
     { icon: Clock, label: "Horario disponible", value: espacio.horarioDisponible ?? "—" },
   ];
 
-  const disponible = espacio.estado === "activo";
+  const estadoVisual = getEstadoVisualEspacio(espacio, mantenimientos);
+  const disponible = estadoVisual === "activo";
   const imagenes = espacio.imagenes ?? [];
 
   const openLightbox = (idx: number) => setLightboxIndex(idx);
@@ -101,7 +109,7 @@ export default function UserEspacioDetalle() {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-semibold">Información general</CardTitle>
-              <StatusBadge estado={espacio.estado} />
+              <StatusBadge estado={estadoVisual} />
             </div>
           </CardHeader>
           <CardContent className="space-y-4">

@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import path from "path";
-import pool from "./lib/db";
+import pool from "./lib/db.postgres";
 import espaciosRoutes from "./routes/espacios.routes";
 import reservacionesRoutes from "./routes/reservaciones.routes";
 import pagosRoutes from "./routes/pagos.routes";
@@ -30,7 +30,7 @@ app.get("/", (_req, res) => {
 
 app.get("/api/health", async (_req, res) => {
   try {
-    const [rows] = await pool.query("SELECT 1 as ok");
+    const { rows } = await pool.query("SELECT 1 as ok");
     res.json({ ok: true, db: rows });
   } catch (error) {
     console.error(error);

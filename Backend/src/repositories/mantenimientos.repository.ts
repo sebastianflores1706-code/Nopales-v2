@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import pool from "../lib/db";
+import pool from "../lib/db.postgres";
 
 export interface Mantenimiento {
   id: string;
@@ -36,15 +36,15 @@ const SELECT_CON_ESPACIO = `
 
 export const mantenimientosRepository = {
   async findAll(): Promise<Mantenimiento[]> {
-    const [rows] = await pool.query(
+    const { rows } = await pool.query(
       `${SELECT_CON_ESPACIO} ORDER BY m.fecha_inicio ASC`
     );
     return (rows as Record<string, unknown>[]).map(toMantenimiento);
   },
 
   async findById(id: string): Promise<Mantenimiento | undefined> {
-    const [rows] = await pool.query(
-      `${SELECT_CON_ESPACIO} WHERE m.id = ?`,
+    const { rows } = await pool.query(
+      `${SELECT_CON_ESPACIO} WHERE m.id = $1`,
       [id]
     );
     const list = rows as Record<string, unknown>[];
@@ -62,31 +62,32 @@ export const mantenimientosRepository = {
     const params: unknown[] = [espacioId, fechaFin, fechaInicio];
     let query = `
       ${SELECT_CON_ESPACIO}
-      WHERE m.espacio_id = ?
-        AND m.fecha_inicio < ?
-        AND m.fecha_fin > ?
+      WHERE m.espacio_id = $1
+        AND m.fecha_inicio < $2
+        AND m.fecha_fin > $3
     `;
     if (excludeId) {
-      query += " AND m.id != ?";
+      query += " AND m.id != $4";
       params.push(excludeId);
     }
-    const [rows] = await pool.query(query, params);
+    const { rows } = await pool.query(query, params);
     return (rows as Record<string, unknown>[]).map(toMantenimiento);
   },
 
-  // Reservaciones activas que se traslapen con el rango datetime del mantenimiento
+  // Reservaciones activas que se traslapen con el rango datetime del mantenimiento.
+  // PostgreSQL: DATE + TIME = TIMESTAMP (equivalente a TIMESTAMP(fecha, hora) de MySQL)
   async findReservacionesEnRango(
     espacioId: string,
     fechaInicio: string,
     fechaFin: string
   ): Promise<{ id: string; folio: string }[]> {
-    const [rows] = await pool.query(
+    const { rows } = await pool.query(
       `SELECT r.id, r.folio
        FROM reservaciones r
-       WHERE r.espacio_id = ?
+       WHERE r.espacio_id = $1
          AND r.estado IN ('pendiente_revision', 'aprobada', 'en_uso')
-         AND TIMESTAMP(r.fecha, r.hora_fin)   > ?
-         AND TIMESTAMP(r.fecha, r.hora_inicio) < ?`,
+         AND (r.fecha + r.hora_fin)   > $2
+         AND (r.fecha + r.hora_inicio) < $3`,
       [espacioId, fechaInicio, fechaFin]
     );
     return (rows as Record<string, unknown>[]).map((row) => ({
@@ -103,13 +104,13 @@ export const mantenimientosRepository = {
   }): Promise<Mantenimiento> {
     const id = randomUUID();
     await pool.query(
-      "INSERT INTO mantenimientos (id, espacio_id, fecha_inicio, fecha_fin, motivo) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO mantenimientos (id, espacio_id, fecha_inicio, fecha_fin, motivo) VALUES ($1, $2, $3, $4, $5)",
       [id, data.espacioId, data.fechaInicio, data.fechaFin, data.motivo]
     );
     return (await this.findById(id))!;
   },
 
   async delete(id: string): Promise<void> {
-    await pool.query("DELETE FROM mantenimientos WHERE id = ?", [id]);
+    await pool.query("DELETE FROM mantenimientos WHERE id = $1", [id]);
   },
 };

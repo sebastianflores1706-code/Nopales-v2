@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import pool from "../lib/db";
+import pool from "../lib/db.postgres";
 import type { CreatePagoDto } from "../validators/pagos.schema";
 
 export interface Pago {
@@ -40,31 +40,31 @@ function toPago(row: Record<string, unknown>): Pago {
 
 export const pagosRepository = {
   async findAll(): Promise<Pago[]> {
-    const [rows] = await pool.query("SELECT * FROM pagos ORDER BY creado_en ASC");
+    const { rows } = await pool.query("SELECT * FROM pagos ORDER BY creado_en ASC");
     return (rows as Record<string, unknown>[]).map(toPago);
   },
 
   async findById(id: string): Promise<Pago | undefined> {
-    const [rows] = await pool.query("SELECT * FROM pagos WHERE id = ?", [id]);
+    const { rows } = await pool.query("SELECT * FROM pagos WHERE id = $1", [id]);
     const list = rows as Record<string, unknown>[];
     if (list.length === 0) return undefined;
     return toPago(list[0]);
   },
 
   async findByReservacionId(reservacionId: string): Promise<Pago[]> {
-    const [rows] = await pool.query(
-      "SELECT * FROM pagos WHERE reservacion_id = ? ORDER BY creado_en ASC",
+    const { rows } = await pool.query(
+      "SELECT * FROM pagos WHERE reservacion_id = $1 ORDER BY creado_en ASC",
       [reservacionId]
     );
     return (rows as Record<string, unknown>[]).map(toPago);
   },
 
   async findByUsuarioId(usuarioId: string): Promise<Pago[]> {
-    const [rows] = await pool.query(
+    const { rows } = await pool.query(
       `SELECT p.*
        FROM pagos p
        INNER JOIN reservaciones r ON r.id = p.reservacion_id
-       WHERE r.usuario_id = ?
+       WHERE r.usuario_id = $1
        ORDER BY p.creado_en ASC`,
       [usuarioId]
     );
@@ -77,7 +77,7 @@ export const pagosRepository = {
 
     await pool.query(
       `INSERT INTO pagos (id, reservacion_id, monto, metodo, estado, referencia, fecha_pago)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         id,
         data.reservacionId,
@@ -96,8 +96,8 @@ export const pagosRepository = {
     const fecha = hoy();
     await pool.query(
       `UPDATE pagos
-       SET estado = 'pagado', fecha_pago = COALESCE(fecha_pago, ?)
-       WHERE reservacion_id = ? AND estado = 'pendiente'`,
+       SET estado = 'pagado', fecha_pago = COALESCE(fecha_pago, $1)
+       WHERE reservacion_id = $2 AND estado = 'pendiente'`,
       [fecha, reservacionId]
     );
   },
@@ -111,7 +111,7 @@ export const pagosRepository = {
       estado === "pagado" && !existing.fechaPago ? hoy() : (existing.fechaPago ?? null);
 
     await pool.query(
-      "UPDATE pagos SET estado = ?, fecha_pago = ? WHERE id = ?",
+      "UPDATE pagos SET estado = $1, fecha_pago = $2 WHERE id = $3",
       [estado, fechaPago, id]
     );
 

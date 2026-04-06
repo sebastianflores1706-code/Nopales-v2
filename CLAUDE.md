@@ -21,7 +21,8 @@ Contexto completo del proyecto para sesiones de desarrollo. Léelo antes de cual
 |---|---|---|
 | Node.js + TypeScript | TS 5.9.3 | Runtime y tipado |
 | Express | 5.2.1 | Framework REST |
-| MySQL2 | 3.20.0 | Base de datos (pool con `mysql2/promise`) |
+| pg (node-postgres) | 8.20.0 | Base de datos PostgreSQL (pool con `pg`) |
+| mysql2 | 3.20.0 | Conservado solo para el script `migrate-mysql-to-postgres.ts` |
 | Zod | 4.3.6 | Validación de schemas en controllers |
 | bcryptjs | 3.0.3 | Hash de contraseñas (salt=10) |
 | jsonwebtoken | 9.0.3 | Auth JWT (cookie httpOnly, 7 días) |
@@ -54,7 +55,7 @@ nopales-v2/
 │   ├── src/
 │   │   ├── controllers/        # Reciben Request, validan con Zod, llaman service, retornan Response
 │   │   ├── services/           # Lógica de negocio, reglas de validación complejas
-│   │   ├── repositories/       # Acceso a MySQL, mapeo de rows a objetos TS
+│   │   ├── repositories/       # Acceso a PostgreSQL, mapeo de rows a objetos TS
 │   │   ├── routes/             # Montaje de rutas + middleware requireAuth
 │   │   ├── middleware/
 │   │   │   └── auth.middleware.ts    # requireAuth: extrae JWT de cookie, pone req.usuario
@@ -64,7 +65,8 @@ nopales-v2/
 │   │   │   ├── pagos.schema.ts
 │   │   │   └── documentos.schema.ts
 │   │   ├── lib/
-│   │   │   ├── db.ts           # Pool MySQL (host:localhost, port:3307, db:nopales)
+│   │   │   ├── db.postgres.ts  # Pool PostgreSQL activo (lee vars PG_* del .env)
+│   │   │   ├── db.ts           # Pool MySQL — YA NO SE USA en src/, solo en script de migración
 │   │   │   ├── pdf.ts          # generatePdf(html): Puppeteer HTML→PDF
 │   │   │   └── upload.ts       # Multer config para imágenes
 │   │   ├── types/
@@ -73,7 +75,9 @@ nopales-v2/
 │   ├── uploads/                # Archivos subidos (imágenes y PDFs) — NO en git
 │   │   ├── espacios/           # Imágenes de espacios (UUID.ext)
 │   │   └── contratos/          # PDFs generados
-│   └── .env                    # DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, JWT_SECRET, FRONTEND_URL
+│   ├── schema.postgres.sql     # DDL completo de PostgreSQL (7 tablas + índices)
+│   ├── migrate-mysql-to-postgres.ts  # Script de migración de datos (ya ejecutado, conservar)
+│   └── .env                    # PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_NAME, JWT_SECRET, FRONTEND_URL
 │
 └── Frontend/
     ├── src/
@@ -126,9 +130,9 @@ nopales-v2/
 
 ## Base de datos
 
-**Puerto**: 3307 (no el 3306 estándar)
+**Motor**: PostgreSQL
+**Puerto**: 5432
 **Nombre**: `nopales`
-**Charset**: `utf8mb4`
 
 ### Tablas principales
 
@@ -139,10 +143,26 @@ nopales-v2/
 | `reservaciones` | id, folio (RES-YYYY-###), espacio_id, usuario_id, solicitante_nombre, tipo_evento, fecha (DATE), hora_inicio, hora_fin (TIME), asistentes, estado, reembolso_estado, reembolso_monto |
 | `pagos` | id, reservacion_id, monto, estado (pendiente\|pagado\|cancelado), metodo (efectivo\|transferencia\|tarjeta), referencia, fecha_pago |
 | `documentos` | id, reservacion_id, tipo (contrato), nombre_archivo, contenido (HTML), pdf_path |
-| `mantenimientos` | id, espacio_id, fecha_inicio (DATETIME), fecha_fin (DATETIME), motivo |
+| `mantenimientos` | id, espacio_id, fecha_inicio (TIMESTAMP), fecha_fin (TIMESTAMP), motivo |
 | `imagenes_espacio` | id, espacio_id, url, created_at |
 
-**Importante MySQL2**: Los campos DATETIME se devuelven como objetos `Date` en Node.js (no strings). Los repositories usan `toISOStr(val)` para convertirlos a ISO strings antes de retornar.
+**Importante pg**: Los campos DATE/TIMESTAMP se devuelven como objetos `Date` en Node.js. Los repositories usan funciones helper `toDateStr(val)` y `toISOStr(val)` para convertirlos a strings antes de retornar.
+
+### Convenciones de queries PostgreSQL
+
+- Placeholders: `$1, $2, $3...` (numerados, NO `?`)
+- Destructuring de resultado: `const { rows } = await pool.query(...)` (NO `const [rows] = ...`)
+- Single row: `const { rows: [row] } = await pool.query(...)`
+- Filas afectadas: `result.rowCount` (NO `result.affectedRows`)
+- Funciones equivalentes a MySQL:
+
+| MySQL | PostgreSQL |
+|---|---|
+| `SUBSTRING_INDEX(str, '-', -1)` | `SPLIT_PART(str, '-', N)` |
+| `TIMESTAMP(fecha, hora)` | `(fecha + hora)` — DATE + TIME = TIMESTAMP |
+| `TIME_TO_SEC(hora)` | `EXTRACT(EPOCH FROM hora)` |
+| `MONTH(col)` / `YEAR(col)` | `EXTRACT(MONTH FROM col)` / `EXTRACT(YEAR FROM col)` |
+| `CURDATE()` | `CURRENT_DATE` |
 
 ---
 
@@ -182,7 +202,7 @@ function toEspacio(row: Record<string, unknown>): Espacio {
 - **Query keys**: strings simples `["espacios"]`, `["reservaciones"]`, `["mantenimientos"]`
 - **Invalidación**: siempre con `queryClient.invalidateQueries({ queryKey: ["clave"] })`
 - **Default staleTime**: 0 (siempre refresca al montar)
-- **refetchInterval**: Se usa en `EspaciosLista` y `EspacioDetalle` para mantenimientos (60s)
+- **refetchInterval**: Se usa en `EspaciosLista`, `EspacioDetalle`, `UserEspacios` y `UserEspacioDetalle` para mantenimientos (60s)
 - **Error handling**: `onError: (err: any) => { const msg = err?.data?.error ?? err?.message }`
 
 ### Frontend: URL-based search
@@ -209,7 +229,7 @@ getEstadoVisualEspacio(espacio, mantenimientos, now?)
 // Retorna espacio.estado en caso contrario
 ```
 
-Usarlo en: `EspaciosLista`, `EspacioDetalle`, y cualquier lugar que muestre estado de espacio.
+Usarlo en: `EspaciosLista`, `EspacioDetalle`, `UserEspacios`, `UserEspacioDetalle`, y cualquier lugar que muestre estado de espacio. **Nunca usar `espacio.estado` directo en un badge o para calcular disponibilidad.**
 
 ---
 
@@ -276,11 +296,13 @@ Agregar endpoints nuevos siempre en este archivo, exportando la función y sus t
 ```
 JWT_SECRET=nopales_secret_cambia_esto_en_produccion
 FRONTEND_URL=http://localhost:8080
-DB_HOST=localhost
-DB_PORT=3307
-DB_USER=root
-DB_PASSWORD=
-DB_NAME=nopales
+
+# PostgreSQL
+PG_HOST=localhost
+PG_PORT=5432
+PG_USER=postgres
+PG_PASSWORD=postgres
+PG_NAME=nopales
 ```
 
 ### Frontend
@@ -303,7 +325,7 @@ npm run dev          # Vite, puerto 8080
 ## Decisiones arquitectónicas relevantes
 
 ### 1. `en_mantenimiento` es estado derivado, no almacenado
-`espacio.estado` solo puede ser `activo` o `inactivo`. El badge "En mantenimiento" se calcula en runtime comparando con la tabla `mantenimientos`. Esto evita inconsistencias y tiene una sola fuente de verdad. Ver `lib/espacio-utils.ts`.
+`espacio.estado` solo puede ser `activo` o `inactivo`. El badge "En mantenimiento" se calcula en runtime comparando con la tabla `mantenimientos`. Esto evita inconsistencias y tiene una sola fuente de verdad. Ver `lib/espacio-utils.ts`. Aplica tanto en el panel admin como en el portal ciudadano.
 
 ### 2. Búsqueda con URL params (`?q=`)
 El header Topbar y las FilterBars de cada página comparten estado de búsqueda via `useSearchParams`. El Topbar escribe `?q=valor`, las páginas lo leen. Soportado en: `/espacios`, `/reservaciones`, `/pagos`, `/usuarios`.
@@ -311,8 +333,8 @@ El header Topbar y las FilterBars de cada página comparten estado de búsqueda 
 ### 3. QueryClient como singleton
 `lib/queryClient.ts` exporta un singleton para poder llamar `queryClient.clear()` desde `AuthContext` al hacer logout, sin necesitar el hook `useQueryClient`.
 
-### 4. Sin sistema de migraciones
-El schema de DB se crea manualmente. No hay archivos de migración ni seeds.
+### 4. Schema de DB en archivo SQL
+El schema de PostgreSQL está en `Backend/schema.postgres.sql`. No hay sistema de migraciones automático. Para recrear la DB: `psql -U postgres -d nopales -f schema.postgres.sql`.
 
 ### 5. PDF generado con Puppeteer desde HTML
 El contrato se construye como string HTML en `documentosService.generarContrato()`, se guarda en DB como `contenido`, y se convierte a PDF bajo demanda con Puppeteer. Los PDFs se sirven desde `/uploads/contratos/`.
@@ -321,10 +343,13 @@ El contrato se construye como string HTML en `documentosService.generarContrato(
 Las imágenes de espacios se guardan con `randomUUID() + ext` en `uploads/espacios/`. La URL guardada en DB es `/uploads/espacios/{uuid}.{ext}`. El frontend la construye con `getImagenUrl(url)` que prefija `API_BASE`.
 
 ### 7. Folio de reservación auto-generado
-Formato `RES-{año}-{número secuencial 3 dígitos}`. El repositorio consulta el COUNT de reservaciones del año para generar el siguiente número.
+Formato `RES-{año}-{número secuencial 3 dígitos}`. El repositorio usa `SPLIT_PART` y `MAX()` en PostgreSQL para calcular el siguiente número.
 
 ### 8. `PageHeader` usa prop `actions` (plural)
 El componente `PageHeader` recibe la prop `actions` (no `action`). Error frecuente al agregar botones a páginas nuevas.
+
+### 9. pg password no puede ser string vacío
+El driver `pg` usa `||` internamente para evaluar el password. Si se pasa `""`, lo convierte a `null` y SASL falla. Siempre usar `process.env.PG_PASSWORD || undefined` en la config del pool.
 
 ---
 
@@ -336,7 +361,8 @@ El componente `PageHeader` recibe la prop `actions` (no `action`). Error frecuen
 | Espacio sigue "activo" tras crear mantenimiento | El mantenimiento inicia en el futuro (revisar hora) | Normal — `getEstadoVisualEspacio` solo activa durante el periodo |
 | `PageHeader` sin botón aunque se pasó prop | Se usó `action` en vez de `actions` | Cambiar a `actions` |
 | `req.usuario` undefined en controller | Falta `requireAuth` en la ruta | Agregar middleware a la ruta en routes/ |
-| Fecha DATETIME llega con 5-6h de diferencia | MySQL2 convierte DATETIME a UTC con timezone local | Esperado — las fechas del frontend se envían como strings locales, MySQL2 las interpreta con el timezone del servidor |
+| `SASL: client password must be a string` | Se pasó `""` como password al pool de pg | Usar `process.env.PG_PASSWORD \|\| undefined` |
+| Portal ciudadano no muestra "En mantenimiento" | Se usó `espacio.estado` directo en vez de `getEstadoVisualEspacio` | Cargar mantenimientos y usar la función helper |
 | `espaciosRepository is not defined` | Import eliminado pero uso no eliminado | Verificar que no queden referencias al import borrado |
 
 ---
@@ -344,6 +370,6 @@ El componente `PageHeader` recibe la prop `actions` (no `action`). Error frecuen
 ## Archivos que NO existen (no generar ni buscar)
 
 - `.env.example` — no existe, usar la sección de env vars aquí
-- Archivos de migración SQL — no existen
+- Archivos de migración SQL automáticos — no existen
 - `swagger.yaml` / documentación de API — no existe
 - Tests E2E (Playwright configurado pero sin tests implementados)

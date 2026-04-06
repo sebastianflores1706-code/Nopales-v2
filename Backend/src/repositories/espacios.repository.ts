@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import pool from "../lib/db";
+import pool from "../lib/db.postgres";
 import type { CreateEspacioDto, UpdateEspacioDto } from "../validators/espacios.schema";
 
 export interface ImagenEspacioRef {
@@ -40,13 +40,13 @@ function toEspacio(row: Record<string, unknown>): Espacio {
 
 export const espaciosRepository = {
   async findAll(): Promise<Espacio[]> {
-    const [rows] = await pool.query("SELECT * FROM espacios ORDER BY creado_en ASC");
+    const { rows } = await pool.query("SELECT * FROM espacios ORDER BY creado_en ASC");
     return (rows as Record<string, unknown>[]).map(toEspacio);
   },
 
   async findById(id: string): Promise<Espacio | undefined> {
-    const [rows] = await pool.query(
-      "SELECT * FROM espacios WHERE id = ?",
+    const { rows } = await pool.query(
+      "SELECT * FROM espacios WHERE id = $1",
       [id]
     );
     const list = rows as Record<string, unknown>[];
@@ -54,8 +54,8 @@ export const espaciosRepository = {
     const espacio = toEspacio(list[0]);
 
     try {
-      const [imgRows] = await pool.query(
-        "SELECT id, url FROM imagenes_espacio WHERE espacio_id = ? ORDER BY created_at ASC",
+      const { rows: imgRows } = await pool.query(
+        "SELECT id, url FROM imagenes_espacio WHERE espacio_id = $1 ORDER BY created_at ASC",
         [id]
       );
       espacio.imagenes = (imgRows as Record<string, unknown>[]).map((r) => ({
@@ -63,7 +63,6 @@ export const espaciosRepository = {
         url: r.url as string,
       }));
     } catch {
-      // La tabla imagenes_espacio aún no existe (migración pendiente)
       espacio.imagenes = [];
     }
 
@@ -75,7 +74,7 @@ export const espaciosRepository = {
     await pool.query(
       `INSERT INTO espacios
         (id, nombre, tipo, ubicacion, capacidad, costo_hora, estado, descripcion, reglas, horario_disponible)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         id,
         data.nombre,
@@ -84,8 +83,8 @@ export const espaciosRepository = {
         data.capacidad,
         data.costoHora,
         data.estado ?? "activo",
-        data.descripcion   ?? null,
-        data.reglas        ?? null,
+        data.descripcion       ?? null,
+        data.reglas            ?? null,
         data.horarioDisponible ?? null,
       ]
     );
@@ -94,6 +93,7 @@ export const espaciosRepository = {
 
   async update(id: string, data: UpdateEspacioDto): Promise<Espacio | undefined> {
     // Construye dinámicamente solo las columnas que vienen en el payload.
+    // PostgreSQL usa placeholders numerados ($1, $2...), no posicionales (?).
     const columnMap: Record<string, string> = {
       nombre:            "nombre",
       tipo:              "tipo",
@@ -111,7 +111,7 @@ export const espaciosRepository = {
 
     for (const [key, col] of Object.entries(columnMap)) {
       if (key in data) {
-        sets.push(`${col} = ?`);
+        sets.push(`${col} = $${sets.length + 1}`);
         values.push((data as Record<string, unknown>)[key]);
       }
     }
@@ -120,17 +120,17 @@ export const espaciosRepository = {
 
     values.push(id);
     await pool.query(
-      `UPDATE espacios SET ${sets.join(", ")} WHERE id = ?`,
+      `UPDATE espacios SET ${sets.join(", ")} WHERE id = $${values.length}`,
       values
     );
     return this.findById(id);
   },
 
   async delete(id: string): Promise<boolean> {
-    const [result] = await pool.query(
-      "DELETE FROM espacios WHERE id = ?",
+    const result = await pool.query(
+      "DELETE FROM espacios WHERE id = $1",
       [id]
     );
-    return (result as { affectedRows: number }).affectedRows > 0;
+    return result.rowCount !== null && result.rowCount > 0;
   },
 };

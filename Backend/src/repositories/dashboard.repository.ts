@@ -1,4 +1,4 @@
-import pool from "../lib/db";
+import pool from "../lib/db.postgres";
 
 export interface DashboardMetricas {
   solicitudesPendientes: number;
@@ -36,12 +36,13 @@ export interface SolicitudPendiente {
 export const dashboardRepository = {
   async getMetricas(): Promise<DashboardMetricas> {
     // Reservaciones en estado pendiente_revision
-    const [[resRow]] = await pool.query<any[]>(
+    const { rows: [resRow] } = await pool.query(
       `SELECT COUNT(*) AS total FROM reservaciones WHERE estado = 'pendiente_revision'`
     );
 
-    // Reservaciones con saldo pendiente: activas donde lo pagado < monto total calculado
-    const [[saldoPendRow]] = await pool.query<any[]>(
+    // Reservaciones con saldo pendiente: activas donde lo pagado < monto total calculado.
+    // EXTRACT(EPOCH FROM (hora_fin - hora_inicio)) reemplaza TIME_TO_SEC de MySQL.
+    const { rows: [saldoPendRow] } = await pool.query(
       `SELECT COUNT(*) AS total
        FROM reservaciones r
        JOIN espacios e ON e.id = r.espacio_id
@@ -50,48 +51,48 @@ export const dashboardRepository = {
            (SELECT SUM(p.monto) FROM pagos p
             WHERE p.reservacion_id = r.id AND p.estado != 'cancelado'),
            0
-         ) < ROUND(e.costo_hora * (TIME_TO_SEC(r.hora_fin) - TIME_TO_SEC(r.hora_inicio)) / 3600, 2)`
+         ) < ROUND(e.costo_hora * EXTRACT(EPOCH FROM (r.hora_fin - r.hora_inicio)) / 3600, 2)`
     );
 
     // Mantenimientos activos o futuros
-    const [[mantoRow]] = await pool.query<any[]>(
+    const { rows: [mantoRow] } = await pool.query(
       `SELECT COUNT(*) AS total FROM mantenimientos WHERE fecha_fin >= NOW()`
     );
 
     // Espacios activos
-    const [[espaciosRow]] = await pool.query<any[]>(
+    const { rows: [espaciosRow] } = await pool.query(
       `SELECT COUNT(*) AS total FROM espacios WHERE estado = 'activo'`
     );
 
-    // Reservaciones de hoy (no canceladas ni rechazadas)
-    const [[hoyRow]] = await pool.query<any[]>(
+    // Reservaciones de hoy — CURRENT_DATE reemplaza CURDATE() de MySQL
+    const { rows: [hoyRow] } = await pool.query(
       `SELECT COUNT(*) AS total
        FROM reservaciones
-       WHERE fecha = CURDATE()
+       WHERE fecha = CURRENT_DATE
          AND estado NOT IN ('cancelada', 'rechazada')`
     );
 
-    // Ingresos del mes (pagos con estado 'pagado')
-    const [[ingresosRow]] = await pool.query<any[]>(
+    // Ingresos del mes — EXTRACT reemplaza MONTH() y YEAR() de MySQL
+    const { rows: [ingresosRow] } = await pool.query(
       `SELECT COALESCE(SUM(monto), 0) AS total
        FROM pagos
        WHERE estado = 'pagado'
-         AND MONTH(fecha_pago) = MONTH(CURDATE())
-         AND YEAR(fecha_pago) = YEAR(CURDATE())`
+         AND EXTRACT(MONTH FROM fecha_pago) = EXTRACT(MONTH FROM CURRENT_DATE)
+         AND EXTRACT(YEAR  FROM fecha_pago) = EXTRACT(YEAR  FROM CURRENT_DATE)`
     );
 
     return {
-      solicitudesPendientes: Number(resRow.total),
-      reservacionesSaldoPendiente: Number(saldoPendRow.total),
-      mantenimientosActivos: Number(mantoRow.total),
-      espaciosActivos: Number(espaciosRow.total),
-      reservacionesHoy: Number(hoyRow.total),
-      ingresosMes: Number(ingresosRow.total),
+      solicitudesPendientes:        Number(resRow.total),
+      reservacionesSaldoPendiente:  Number(saldoPendRow.total),
+      mantenimientosActivos:        Number(mantoRow.total),
+      espaciosActivos:              Number(espaciosRow.total),
+      reservacionesHoy:             Number(hoyRow.total),
+      ingresosMes:                  Number(ingresosRow.total),
     };
   },
 
   async getEspaciosMasUtilizados(): Promise<EspacioUtilizado[]> {
-    const [rows] = await pool.query<any[]>(`
+    const { rows } = await pool.query(`
       SELECT
         e.nombre,
         COUNT(r.id) AS reservaciones
@@ -116,7 +117,7 @@ export const dashboardRepository = {
   },
 
   async getActividadReciente(): Promise<ActividadItem[]> {
-    const [resRows] = await pool.query<any[]>(`
+    const { rows: resRows } = await pool.query(`
       SELECT
         r.id,
         'reservacion'                              AS tipo,
@@ -130,7 +131,7 @@ export const dashboardRepository = {
       LIMIT 4
     `);
 
-    const [pagoRows] = await pool.query<any[]>(`
+    const { rows: pagoRows } = await pool.query(`
       SELECT
         p.id,
         'pago'                                     AS tipo,
@@ -160,12 +161,12 @@ export const dashboardRepository = {
   },
 
   async getSolicitudesPendientes(): Promise<SolicitudPendiente[]> {
-    const [rows] = await pool.query<any[]>(`
+    const { rows } = await pool.query(`
       SELECT
-        r.folio          AS id,
+        r.folio              AS id,
         r.solicitante_nombre AS solicitante,
-        e.nombre         AS espacio,
-        r.tipo_evento    AS tipo,
+        e.nombre             AS espacio,
+        r.tipo_evento        AS tipo,
         r.fecha,
         r.estado
       FROM reservaciones r

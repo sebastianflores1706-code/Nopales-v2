@@ -8,7 +8,8 @@ import { EmptyState } from "@/components/admin/EmptyState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getEspacios } from "@/lib/api";
+import { getEspacios, getMantenimientos } from "@/lib/api";
+import { getEstadoVisualEspacio } from "@/lib/espacio-utils";
 
 function EspacioCardSkeleton() {
   return (
@@ -32,6 +33,12 @@ export default function UserEspacios() {
   const { data: espacios = [], isLoading, isError } = useQuery({
     queryKey: ["espacios"],
     queryFn: getEspacios,
+  });
+
+  const { data: mantenimientos = [] } = useQuery({
+    queryKey: ["mantenimientos"],
+    queryFn: getMantenimientos,
+    refetchInterval: 60_000,
   });
 
   return (
@@ -73,7 +80,7 @@ export default function UserEspacios() {
                   <CardTitle className="text-base font-semibold leading-tight">
                     {espacio.nombre}
                   </CardTitle>
-                  <StatusBadge estado={espacio.estado} />
+                  <StatusBadge estado={getEstadoVisualEspacio(espacio, mantenimientos)} />
                 </div>
                 <p className="text-xs text-muted-foreground capitalize">{espacio.tipo}</p>
               </CardHeader>

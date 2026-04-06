@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import pool from "../lib/db";
+import pool from "../lib/db.postgres";
 
 export interface Usuario {
   id: string;
@@ -42,15 +42,15 @@ function toUsuarioPublico(row: Record<string, unknown>): UsuarioPublico {
 
 export const usuariosRepository = {
   async findAll(): Promise<UsuarioPublico[]> {
-    const [rows] = await pool.query(
+    const { rows } = await pool.query(
       "SELECT id, nombre, correo, rol, creado_en FROM usuarios ORDER BY nombre ASC"
     );
     return (rows as Record<string, unknown>[]).map(toUsuarioPublico);
   },
 
   async findByCorreo(correo: string): Promise<Usuario | undefined> {
-    const [rows] = await pool.query(
-      "SELECT id, nombre, correo, hash_contrasena, rol FROM usuarios WHERE correo = ?",
+    const { rows } = await pool.query(
+      "SELECT id, nombre, correo, hash_contrasena, rol FROM usuarios WHERE correo = $1",
       [correo]
     );
     const list = rows as Record<string, unknown>[];
@@ -59,8 +59,8 @@ export const usuariosRepository = {
   },
 
   async findById(id: string): Promise<Usuario | undefined> {
-    const [rows] = await pool.query(
-      "SELECT id, nombre, correo, hash_contrasena, rol FROM usuarios WHERE id = ?",
+    const { rows } = await pool.query(
+      "SELECT id, nombre, correo, hash_contrasena, rol FROM usuarios WHERE id = $1",
       [id]
     );
     const list = rows as Record<string, unknown>[];
@@ -77,7 +77,7 @@ export const usuariosRepository = {
     const id = randomUUID();
     const rol = data.rol ?? "ciudadano";
     await pool.query(
-      "INSERT INTO usuarios (id, nombre, correo, hash_contrasena, rol) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO usuarios (id, nombre, correo, hash_contrasena, rol) VALUES ($1, $2, $3, $4, $5)",
       [id, data.nombre, data.correo, data.hashContrasena, rol]
     );
     const usuario = await this.findById(id);

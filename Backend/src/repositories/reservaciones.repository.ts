@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import pool from "../lib/db";
+import pool from "../lib/db.postgres";
 import type { CreateReservacionDto } from "../validators/reservaciones.schema";
 
 export interface Reservacion {
@@ -23,7 +23,7 @@ export interface Reservacion {
   reembolsoMonto: number;
 }
 
-// mysql2 devuelve columnas DATE como objetos Date cuando dateStrings no está activado.
+// pg devuelve columnas DATE como objetos Date.
 // String(date) produce "Fri Mar 20 2026 …", no "2026-03-20".
 // Esta función extrae la fecha en formato ISO usando los getters locales del objeto Date.
 function toDateStr(val: unknown): string {
@@ -82,10 +82,11 @@ const SELECT_CON_ESPACIO = `
 
 async function generarFolio(): Promise<string> {
   const anio = new Date().getFullYear();
-  const [rows] = await pool.query(
-    `SELECT MAX(CAST(SUBSTRING_INDEX(folio, '-', -1) AS UNSIGNED)) AS max_num
+  // SPLIT_PART(folio, '-', 3) extrae la parte numérica de 'RES-2026-001'
+  const { rows } = await pool.query(
+    `SELECT MAX(CAST(SPLIT_PART(folio, '-', 3) AS INTEGER)) AS max_num
      FROM reservaciones
-     WHERE folio LIKE ?`,
+     WHERE folio LIKE $1`,
     [`RES-${anio}-%`]
   );
   const maxNum = (rows as Record<string, unknown>[])[0].max_num as number | null;
@@ -95,21 +96,21 @@ async function generarFolio(): Promise<string> {
 
 export const reservacionesRepository = {
   async findAll(): Promise<Reservacion[]> {
-    const [rows] = await pool.query(`${SELECT_CON_ESPACIO} ORDER BY r.creado_en ASC`);
+    const { rows } = await pool.query(`${SELECT_CON_ESPACIO} ORDER BY r.creado_en ASC`);
     return (rows as Record<string, unknown>[]).map(toReservacion);
   },
 
   async findByUsuarioId(usuarioId: string): Promise<Reservacion[]> {
-    const [rows] = await pool.query(
-      `${SELECT_CON_ESPACIO} WHERE r.usuario_id = ? ORDER BY r.creado_en ASC`,
+    const { rows } = await pool.query(
+      `${SELECT_CON_ESPACIO} WHERE r.usuario_id = $1 ORDER BY r.creado_en ASC`,
       [usuarioId]
     );
     return (rows as Record<string, unknown>[]).map(toReservacion);
   },
 
   async findById(id: string): Promise<Reservacion | undefined> {
-    const [rows] = await pool.query(
-      `${SELECT_CON_ESPACIO} WHERE r.id = ?`,
+    const { rows } = await pool.query(
+      `${SELECT_CON_ESPACIO} WHERE r.id = $1`,
       [id]
     );
     const list = rows as Record<string, unknown>[];
@@ -118,8 +119,8 @@ export const reservacionesRepository = {
   },
 
   async findByEspacioFecha(espacioId: string, fecha: string): Promise<Reservacion[]> {
-    const [rows] = await pool.query(
-      `${SELECT_CON_ESPACIO} WHERE r.espacio_id = ? AND r.fecha = ?`,
+    const { rows } = await pool.query(
+      `${SELECT_CON_ESPACIO} WHERE r.espacio_id = $1 AND r.fecha = $2`,
       [espacioId, fecha]
     );
     return (rows as Record<string, unknown>[]).map(toReservacion);
@@ -136,7 +137,7 @@ export const reservacionesRepository = {
     await pool.query(
       `INSERT INTO reservaciones
         (id, folio, espacio_id, usuario_id, solicitante_nombre, tipo_evento, descripcion_evento, fecha, hora_inicio, hora_fin, asistentes, estado)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente_revision')`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pendiente_revision')`,
       [
         id,
         folio,
@@ -159,7 +160,7 @@ export const reservacionesRepository = {
 
   async updateEstado(id: string, estado: string): Promise<Reservacion | undefined> {
     await pool.query(
-      "UPDATE reservaciones SET estado = ? WHERE id = ?",
+      "UPDATE reservaciones SET estado = $1 WHERE id = $2",
       [estado, id]
     );
     return this.findById(id);
@@ -171,7 +172,7 @@ export const reservacionesRepository = {
     reembolsoMonto: number
   ): Promise<Reservacion | undefined> {
     await pool.query(
-      "UPDATE reservaciones SET estado = 'cancelada', reembolso_estado = ?, reembolso_monto = ? WHERE id = ?",
+      "UPDATE reservaciones SET estado = 'cancelada', reembolso_estado = $1, reembolso_monto = $2 WHERE id = $3",
       [reembolsoEstado, reembolsoMonto, id]
     );
     return this.findById(id);
@@ -179,18 +180,19 @@ export const reservacionesRepository = {
 
   async updateReembolsoEstado(id: string, reembolsoEstado: string): Promise<Reservacion | undefined> {
     await pool.query(
-      "UPDATE reservaciones SET reembolso_estado = ? WHERE id = ?",
+      "UPDATE reservaciones SET reembolso_estado = $1 WHERE id = $2",
       [reembolsoEstado, id]
     );
     return this.findById(id);
   },
 
   async finalizarVencidas(): Promise<void> {
+    // PostgreSQL: DATE + TIME = TIMESTAMP (equivalente a TIMESTAMP(fecha, hora) de MySQL)
     await pool.query(`
       UPDATE reservaciones
       SET estado = 'finalizada'
       WHERE estado IN ('aprobada', 'en_uso')
-        AND TIMESTAMP(fecha, hora_fin) < NOW()
+        AND (fecha + hora_fin) < NOW()
     `);
   },
 };
