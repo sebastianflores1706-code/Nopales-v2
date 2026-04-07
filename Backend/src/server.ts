@@ -16,8 +16,10 @@ import imagenesRoutes from "./routes/imagenes.routes";
 
 const app = express();
 
+const ORIGIN = process.env.FRONTEND_URL ?? "http://localhost:5173";
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL ?? "http://localhost:5173",
+  origin: ORIGIN,
   credentials: true,
 }));
 app.use(cookieParser());
@@ -52,8 +54,10 @@ app.use("/api/mantenimientos", mantenimientosRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/espacios/:id/imagenes", imagenesRoutes);
 
-const PORT = 3000;
+const PORT = Number(process.env.NODE_PORT) || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+  console.log(`[server] Puerto:  ${PORT}`);
+  console.log(`[server] CORS:    ${ORIGIN}`);
+  console.log(`[server] DB:      ${process.env.PG_HOST ?? "localhost"}:${process.env.PG_PORT ?? 5432}/${process.env.PG_NAME ?? "nopales"}`);
 });

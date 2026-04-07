@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const espacios_controller_1 = require("../controllers/espacios.controller");
+const router = (0, express_1.Router)();
+router.get("/", espacios_controller_1.espaciosController.getAll);
+router.get("/:id", espacios_controller_1.espaciosController.getById);
+router.post("/", espacios_controller_1.espaciosController.create);
+router.put("/:id", espacios_controller_1.espaciosController.update);
+router.delete("/:id", espacios_controller_1.espaciosController.delete);
+exports.default = router;

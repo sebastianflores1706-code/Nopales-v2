@@ -22,7 +22,9 @@
       "Bash(curl -s \"http://localhost:3000/api/espacios\")",
       "Bash(npx tsc:*)",
       "Bash(node:*)",
-      "Bash(find /c/Users/sebas/OneDrive/Desktop/nopales-v2 -not -path */node_modules/* -type f -name *.json -o -name *.ts -o -name *.tsx -o -name *.sql -o -name .env*)"
+      "Bash(find /c/Users/sebas/OneDrive/Desktop/nopales-v2 -not -path */node_modules/* -type f -name *.json -o -name *.ts -o -name *.tsx -o -name *.sql -o -name .env*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm run:*)"
     ]
   }
 }
